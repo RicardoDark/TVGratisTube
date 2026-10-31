@@ -84,7 +84,8 @@ const YT_FOLDERS = [
 const yt = {
     servers: YT_DEFAULT_SERVERS.slice(), key: '', sb: 'https://sponsor.ajay.app',
     folders: [], byTitle: {}, st: {}, list: [], seen: {},
-    good: 0, tok: 0, segs: [], dual: false, audio: null,
+    good: 0, goodUrl: '', extra: [], discP: null, discDone: false,
+    tok: 0, segs: [], dual: false, audio: null,
     remoteP: null, kind: 'movies',
     sq: { state: 'idle' }, sqT: null, sqTok: 0, lastQ: null, lastCards: null
 };
@@ -182,7 +183,7 @@ const YT_OPS = {
     piped: {
         search: async function (u, a) {
             let out = [], next = null;
-            for (let p = 0; p < 4; p++) {
+            for (let p = 0; p < (a.pages || 4); p++) {
                 const url = next
                     ? u + '/nextpage/search?nextpage=' + encodeURIComponent(next) + '&q=' + encodeURIComponent(a.q) + '&filter=videos'
                     : u + '/search?q=' + encodeURIComponent(a.q) + '&filter=videos';
@@ -193,7 +194,7 @@ const YT_OPS = {
                 }).filter(function (x) { return x.id; });
                 out = out.concat(items);
                 next = res.nextpage;
-                if (!next || !items.length || ytPick(out, a.min, a.max).length >= 24) break;
+                if (!next || !items.length || ytPick(out, a.min, a.max).length >= (a.want || 24)) break;
             }
             return out;
         },
@@ -213,7 +214,7 @@ const YT_OPS = {
     inv: {
         search: async function (u, a) {
             let out = [];
-            for (let p = 1; p <= 4; p++) {
+            for (let p = 1; p <= (a.pages || 4); p++) {
                 let res;
                 try { res = await ytGet(u + '/api/v1/search?q=' + encodeURIComponent(a.q) + '&type=video&page=' + p); }
                 catch (e) { if (!out.length) throw e; break; }
@@ -221,7 +222,7 @@ const YT_OPS = {
                     return { id: x.videoId, title: x.title, channel: x.author, dur: x.lengthSeconds, views: x.viewCount };
                 });
                 out = out.concat(items);
-                if (!items.length || ytPick(out, a.min, a.max).length >= 24) break;
+                if (!items.length || ytPick(out, a.min, a.max).length >= (a.want || 24)) break;
             }
             return out;
         },
@@ -257,16 +258,27 @@ const YT_OPS = {
     }
 };
 
+// Lista de servidores: os do GitHub (update.json) + os descobertos automaticamente (sem repetir)
+function ytServerList() {
+    const out = [], seen = {};
+    yt.servers.concat(yt.extra || []).forEach(function (x) {
+        if (!x || !x.url || seen[x.url]) return;
+        seen[x.url] = 1;
+        out.push(x);
+    });
+    return out.slice(0, 26);
+}
+
 // Tenta vários servidores quase ao mesmo tempo; vale o primeiro que responder certo.
 function ytRace(op, arg, validate) {
     return new Promise(function (res, rej) {
-        let list = yt.servers.slice();
+        const list = ytServerList();
         if (op === 'search' && yt.key) list.unshift({ type: 'api', url: '' });
         const n = list.length;
         if (!n) { rej(new Error('nenhum servidor')); return; }
-        let done = false, fails = 0;
+        let done = false, fails = 0, first = 0;
         const errs = [], timers = [];
-        const first = yt.good % n;
+        for (let i = 0; i < n; i++) { if (yt.goodUrl && list[i].url === yt.goodUrl) { first = i; break; } }
         const order = [first].concat(list.map(function (x, i) { return i; }).filter(function (i) { return i !== first; }));
         order.forEach(function (i, k) {
             timers.push(setTimeout(function () {
@@ -276,15 +288,56 @@ function ytRace(op, arg, validate) {
                     if (validate && !validate(r)) throw new Error('sem resultado');
                     done = true;
                     timers.forEach(clearTimeout);
-                    yt.good = i;
+                    if (list[i].type !== 'api') yt.goodUrl = list[i].url;
                     res(r);
                 }).catch(function (e) {
                     errs.push((list[i].type === 'api' ? 'YouTube API' : ytHost(list[i].url)) + ': ' + e.message);
-                    if (++fails === n && !done) rej(new Error(errs.slice(0, 3).join('\n')));
+                    if (++fails === n && !done) rej(new Error(errs.slice(0, 4).join('\n')));
                 });
-            }, k * 350));
+            }, k * 300));
         });
     });
+}
+
+// Busca; se todos os servidores da lista falharem, espera a descoberta automática e tenta de novo
+function ytSearch(arg, validate) {
+    const had = ytServerList().length;
+    return ytRace('search', arg, validate).catch(function (e) {
+        if (!yt.discP) throw e;
+        return yt.discP.then(function () {
+            if (ytServerList().length <= had) throw e;
+            return ytRace('search', arg, validate);
+        });
+    });
+}
+
+// Descobre sozinho servidores Piped/Invidious que estão no ar (listas oficiais dos projetos)
+function ytDiscover() {
+    const C = lsGet('iptv_yt_disc', null);
+    if (C && C.l && C.l.length) yt.extra = C.l;
+    if (C && C.l && C.l.length && Date.now() - C.t < 6 * 3600 * 1000) { yt.discDone = true; return Promise.resolve(); }
+    const out = [];
+    const p1 = ytGet('https://piped-instances.kavin.rocks/', 6000).then(function (r) {
+        let n = 0;
+        (Array.isArray(r) ? r : []).forEach(function (x) {
+            const u = x && x.api_url;
+            if (n >= 14 || !/^https:\/\//.test(u || '')) return;
+            out.push({ type: 'piped', url: u.replace(/\/$/, '') }); n++;
+        });
+    }).catch(function () {});
+    const p2 = ytGet('https://api.invidious.io/instances.json?sort_type=health', 6000).then(function (r) {
+        let n = 0;
+        (Array.isArray(r) ? r : []).forEach(function (x) {
+            const o = x && x[1];
+            if (n >= 10 || !o || o.type !== 'https' || o.api === false || o.cors === false || !/^https:\/\//.test(o.uri || '')) return;
+            out.push({ type: 'inv', url: o.uri.replace(/\/$/, '') }); n++;
+        });
+    }).catch(function () {});
+    yt.discP = Promise.all([p1, p2]).then(function () {
+        if (out.length) { yt.extra = out; lsSet('iptv_yt_disc', { t: Date.now(), l: out }); }
+        yt.discDone = true;
+    });
+    return yt.discP;
 }
 
 /* ---------- cartões ---------- */
@@ -347,6 +400,43 @@ function ytRefresh(f) {
     applyFocus();
 }
 
+// Meta de vídeos por pasta e variações da busca usadas para completar a lista
+const YT_TARGET = 300;
+const YT_VARIANTS = ['', ' HD', ' 2023', ' 2022', ' 2021', ' 2019', ' legendado', ' grátis', ' melhores', ' online', ' 2018', ' 2017'];
+
+// a lista cresceu em segundo plano: atualiza o total e acrescenta cartões sem mexer na posição da tela
+function ytGrow(f) {
+    if (!state.vodActive || vod.src !== 'yt' || vod.view !== 'home' || vod.catId !== f.title) return;
+    vod.list = getCatList(vod.catId);
+    const g = $v('vod-grid');
+    if (!g) return;
+    if (g.querySelector('.vod-empty')) { ytRefresh(f); return; }
+    for (let k = 0; k < 3 && g.children.length < GRID_STEP && g.children.length < vod.list.length; k++) loadMore();
+    const t = $v('vod-total'); if (t) t.textContent = 'Total: ' + vod.list.length;
+}
+
+// busca mais vídeos (páginas mais fundas + variações do texto) até chegar na meta
+function ytDeepen(f, s, run, all, add, ck) {
+    let step = 0, fails = 0;
+    const next = function () {
+        if (s.run !== run || all.length >= YT_TARGET || step >= YT_VARIANTS.length || fails >= 3) return;
+        const q = f.q + YT_VARIANTS[step++];
+        ytRace('search', { q: q, min: f.min, max: f.max, pages: 12, want: YT_TARGET }, function (r) { return ytPick(r, f.min, f.max).length > 0; })
+            .then(function (r) {
+                if (s.run !== run) return;
+                const fresh = add(ytPick(r, f.min, f.max));
+                if (fresh.length) {
+                    ytFillFolder(f, fresh);
+                    lsSet(ck, { t: Date.now(), q: f.q, items: all.slice(0, YT_TARGET) });
+                    ytGrow(f);
+                }
+                setTimeout(next, 400);
+            })
+            .catch(function () { fails++; setTimeout(next, 1500); });
+    };
+    next();
+}
+
 function ytEnsureFolder(catId, force) {
     const f = yt.byTitle[catId];
     if (!f) return;
@@ -356,24 +446,40 @@ function ytEnsureFolder(catId, force) {
     const ck = 'iptv_yt_sec_' + f.key;
     const c = lsGet(ck, null);
     const hasCache = c && c.q === f.q && c.items && c.items.length;
+    const run = s.run = (s.run || 0) + 1;
+    const all = [], seen = {};
+    const add = function (items) {
+        const fresh = [];
+        (items || []).forEach(function (it) {
+            if (all.length < YT_TARGET && it && it.id && !seen[it.id]) { seen[it.id] = 1; all.push(it); fresh.push(it); }
+        });
+        return fresh;
+    };
     if (!force && hasCache && Date.now() - c.t < YT_TTL) {
+        add(c.items);
         ytFillFolder(f, c.items);
         s.state = 'ok';
+        if (all.length < YT_TARGET / 2) ytDeepen(f, s, run, all, add, ck);
         return;
     }
     s.state = 'loading';
-    ytRace('search', { q: f.q, min: f.min, max: f.max }, function (r) { return ytPick(r, f.min, f.max).length > 0; })
+    s.err = '';
+    ytSearch({ q: f.q, min: f.min, max: f.max, pages: 4, want: 24 }, function (r) { return ytPick(r, f.min, f.max).length > 0; })
         .then(function (r) {
-            const items = ytPick(r, f.min, f.max).slice(0, 48);
-            lsSet(ck, { t: Date.now(), q: f.q, items: items });
+            const items = ytPick(r, f.min, f.max);
+            add(items);
+            lsSet(ck, { t: Date.now(), q: f.q, items: all.slice(0, YT_TARGET) });
             ytFillFolder(f, items);
             s.state = 'ok';
         })
         .catch(function (e) {
-            if (hasCache) { ytFillFolder(f, c.items); s.state = 'ok'; }   // usa a cópia antiga
+            if (hasCache) { add(c.items); ytFillFolder(f, c.items); s.state = 'ok'; }   // usa a cópia antiga
             else { s.state = 'fail'; s.err = e && e.message; }
         })
-        .then(function () { ytRefresh(f); });
+        .then(function () {
+            ytRefresh(f);
+            if (s.state === 'ok' && s.run === run && all.length < YT_TARGET) ytDeepen(f, s, run, all, add, ck);
+        });
 }
 
 function ytEmptyText() {
@@ -388,7 +494,8 @@ function ytEmptyText() {
     const s = f && yt.st[f.key];
     if (!s) return null;
     if (s.state === 'loading') return 'Carregando vídeos do YouTube...';
-    if (s.state === 'fail') return 'Não consegui carregar esta pasta. Confira a internet e aperte OK para tentar de novo.';
+    if (s.state === 'fail') return 'Não consegui carregar esta pasta. Confira a internet e aperte OK para tentar de novo.' +
+        (s.err ? '<br><small>' + esc(String(s.err).split('\n').slice(0, 3).join('  |  ')) + '</small>' : '');
     return null;
 }
 
@@ -602,6 +709,7 @@ function autoEnterFree() {
     renderExpiry(null);
     showSplashAfterLogin();
     yt.remoteP = ytLoadRemote();
+    ytDiscover();
     setTimeout(ytCheckUpdate, 1500);
 }
 
