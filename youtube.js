@@ -14,7 +14,7 @@ const YT_RULES_URL = 'https://raw.githubusercontent.com/RicardoDark/tviptvtube-a
 const YT_VERSION_URL = 'https://raw.githubusercontent.com/RicardoDark/tviptvtube/refs/heads/main/version.json';
 
 const YT_RES = 720;                       // qualidade preferida
-const YT_TTL = 30 * 60 * 1000;            // guarda cada pasta por 30 min
+const YT_TTL = 3 * 60 * 60 * 1000;        // a lista guardada é atualizada em segundo plano depois de 3 horas
 const YT_SB_CATS = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview'];
 const LS_YT_REMOTE = 'iptv_yt_remote';
 const LS_YT_CARDS = 'iptv_yt_cards';
@@ -87,6 +87,7 @@ const yt = {
     good: 0, goodUrl: '', extra: [], discP: null, discDone: false,
     tok: 0, segs: [], dual: false, audio: null,
     remoteP: null, kind: 'movies',
+    tv: [],   // pastas da aba TV (vêm só do update.json do GitHub, campo "tv")
     sq: { state: 'idle' }, sqT: null, sqTok: 0, lastQ: null, lastCards: null
 };
 
@@ -112,6 +113,10 @@ function ytGet(url, ms) {
 }
 function ytHost(u) { return String(u || '').replace(/^https?:\/\//, ''); }
 function ytIdFromUrl(u) { const m = /[?&]v=([^&]+)/.exec(u || ''); return m ? m[1] : ''; }
+function ytIdAny(u) {
+    const m = /(?:youtu\.be\/|[?&]v=|\/live\/|\/embed\/)([\w-]{11})/.exec(u || '');
+    return m ? m[1] : '';
+}
 function ytThumb(id) { return 'https://i.ytimg.com/vi/' + id + '/mqdefault.jpg'; }
 function ytViews(n) {
     n = +n;
@@ -129,7 +134,23 @@ function ytDecode(s) { const t = document.createElement('textarea'); t.innerHTML
 /* ---------- regras do GitHub ---------- */
 function ytApplyRemote(r) {
     yt.folders = YT_FOLDERS.map(function (f) { return Object.assign({}, f); });
+    yt.tv = [];
     if (r && typeof r === 'object') {
+        // Pastas de TV ao vivo (aba "TV ao Vivo"): { title, canais: [ { nome, id | url, logo } ] }
+        if (Array.isArray(r.tv)) {
+            r.tv.forEach(function (p) {
+                if (!p || !p.title || !Array.isArray(p.canais)) return;
+                const canais = [];
+                p.canais.forEach(function (c) {
+                    if (!c) return;
+                    let id = String(c.id || '').trim();
+                    if (!/^[\w-]{11}$/.test(id)) id = ytIdAny(c.url);
+                    if (!id) return;
+                    canais.push({ nome: String(c.nome || c.name || 'Canal ao vivo'), id: id, logo: c.logo ? String(c.logo) : '' });
+                });
+                if (canais.length) yt.tv.push({ title: String(p.title), canais: canais });
+            });
+        }
         if (Array.isArray(r.servidores)) {
             const l = r.servidores.map(function (x) {
                 return { type: String((x && (x.tipo || x.type)) || ''), url: String((x && x.url) || '').replace(/\/$/, '') };
@@ -144,12 +165,13 @@ function ytApplyRemote(r) {
                 const key = String(x.key).replace(/[^a-z0-9_-]/gi, '');
                 const f = yt.folders.filter(function (y) { return y.key === key; })[0];
                 if (f) {
+                    // o que está no GitHub manda: sem "min"/"max" = mostra vídeos de qualquer tamanho
                     f.q = String(x.q);
-                    if (+x.min) f.min = +x.min;
-                    if (+x.max) f.max = +x.max;
+                    f.min = x.ao_vivo ? -1 : (+x.min || 0);
+                    f.max = +x.max || 0;
                 } else if (x.title) {
                     const tp = String(x.tipo || x.type || 'movies') === 'series' ? 'series' : 'movies';
-                    yt.folders.push({ key: key, tipo: tp, title: String(x.title), q: String(x.q), min: +x.min || 600, max: +x.max || 0 });
+                    yt.folders.push({ key: key, tipo: tp, title: String(x.title), q: String(x.q), min: x.ao_vivo ? -1 : (+x.min || 0), max: +x.max || 0 });
                 }
             });
         }
@@ -169,10 +191,13 @@ function ytLoadRemote() {
 /* ---------- busca e streams (Piped / Invidious / API do YouTube) ---------- */
 function ytPick(list, min, max) {
     const seen = {};
+    const liveOnly = min === -1;   // pasta com "ao_vivo": true no GitHub mostra só transmissões ao vivo
     return (list || []).filter(function (x) {
         if (!x || !x.id || seen[x.id]) return false;
+        if (liveOnly) { if (!x.live) return false; seen[x.id] = 1; return true; }
+        if (x.live) return false;
         const d = +x.dur || 0;
-        if (d < (min || 0)) return false;
+        if (d < Math.max(min || 0, 30)) return false;   // sem filtro, só ignora vinhetas/Shorts de menos de 30 s
         if (max && d > max) return false;
         seen[x.id] = 1;
         return true;
@@ -190,7 +215,7 @@ const YT_OPS = {
                 let res;
                 try { res = await ytGet(url); } catch (e) { if (!out.length) throw e; break; }
                 const items = (res.items || []).map(function (p) {
-                    return { id: ytIdFromUrl(p.url), title: p.title, channel: p.uploaderName, dur: p.duration, views: p.views };
+                    return { id: ytIdFromUrl(p.url), title: p.title, channel: p.uploaderName, dur: p.duration, views: p.views, live: p.duration === -1 };
                 }).filter(function (x) { return x.id; });
                 out = out.concat(items);
                 next = res.nextpage;
@@ -216,10 +241,10 @@ const YT_OPS = {
             let out = [];
             for (let p = 1; p <= (a.pages || 4); p++) {
                 let res;
-                try { res = await ytGet(u + '/api/v1/search?q=' + encodeURIComponent(a.q) + '&type=video&page=' + p); }
+                try { res = await ytGet(u + '/api/v1/search?q=' + encodeURIComponent(a.q) + '&type=video&page=' + p + (a.min === -1 ? '&features=live' : '')); }
                 catch (e) { if (!out.length) throw e; break; }
                 const items = (res || []).filter(function (x) { return x.videoId; }).map(function (x) {
-                    return { id: x.videoId, title: x.title, channel: x.author, dur: x.lengthSeconds, views: x.viewCount };
+                    return { id: x.videoId, title: x.title, channel: x.author, dur: x.lengthSeconds, views: x.viewCount, live: !!x.liveNow };
                 });
                 out = out.concat(items);
                 if (!items.length || ytPick(out, a.min, a.max).length >= (a.want || 24)) break;
@@ -243,7 +268,7 @@ const YT_OPS = {
             const dur = (a.min || 0) >= 1200 ? 'long' : (a.min || 0) >= 240 ? 'medium' : 'any';
             const base = 'https://www.googleapis.com/youtube/v3';
             const r = await ytGet(base + '/search?part=snippet&type=video&videoEmbeddable=true&videoDuration=' + dur +
-                '&maxResults=50&regionCode=BR&q=' + encodeURIComponent(a.q) + '&key=' + encodeURIComponent(yt.key));
+                '&maxResults=50&regionCode=BR' + (a.min === -1 ? '&eventType=live' : '') + '&q=' + encodeURIComponent(a.q) + '&key=' + encodeURIComponent(yt.key));
             const ids = (r.items || []).map(function (i) { return i.id && i.id.videoId; }).filter(Boolean);
             if (!ids.length) return [];
             const d = await ytGet(base + '/videos?part=snippet,contentDetails,statistics&id=' + ids.join(',') + '&key=' + encodeURIComponent(yt.key));
@@ -251,7 +276,8 @@ const YT_OPS = {
                 return {
                     id: v.id, title: ytDecode(v.snippet.title), channel: ytDecode(v.snippet.channelTitle),
                     dur: ytIsoDur(v.contentDetails && v.contentDetails.duration),
-                    views: v.statistics && v.statistics.viewCount != null ? +v.statistics.viewCount : 0
+                    views: v.statistics && v.statistics.viewCount != null ? +v.statistics.viewCount : 0,
+                    live: !!(v.snippet && v.snippet.liveBroadcastContent === 'live')
                 };
             });
         }
@@ -343,8 +369,8 @@ function ytDiscover() {
 /* ---------- cartões ---------- */
 function ytMk(it, group) {
     const id = it.id;
-    const dur = +it.dur || 0;
-    const plot = (it.channel ? 'Canal: ' + it.channel : '') +
+    const dur = Math.max(0, +it.dur || 0);
+    const plot = (it.live ? 'AO VIVO' + (it.channel ? '  •  ' : '') : '') + (it.channel ? 'Canal: ' + it.channel : '') +
         (it.views ? (it.channel ? '  •  ' : '') + ytViews(it.views) + ' visualizações' : '');
     return {
         key: 'yt:' + id, title: ytDecode(it.title || ''), logo: ytThumb(id), kind: 'movie', group: group,
@@ -387,6 +413,83 @@ function ytMergeStored() {
     Object.keys(m).forEach(function (k) { if (!vod.byKey[k]) vod.byKey[k] = Object.assign({}, m[k]); });
 }
 
+/* ---------- TV ao vivo do YouTube (pasta "TV e YouTube", vinda do GitHub) ---------- */
+// Coloca as pastas de TV do GitHub na lista da aba TV ao Vivo (os canais viram "yt:ID")
+function ytInjectTv() {
+    state.ytTvCount = 0;
+    const add = [];
+    (yt.tv || []).forEach(function (p) {
+        const list = p.canais.map(function (c) {
+            return {
+                id: 'yt_' + c.id, name: c.nome, url: 'yt:' + c.id, folder: p.title,
+                logo: c.logo || ('https://i.ytimg.com/vi/' + c.id + '/mqdefault_live.jpg')
+            };
+        });
+        if (!list.length) return;
+        add.push({ title: p.title, list: list });
+    });
+    // fica fixa no topo (logo depois de Favoritos)
+    add.slice().reverse().forEach(function (a) {
+        state.folders = state.folders.filter(function (f) { return f !== a.title; });
+        state.folders.unshift(a.title);
+        state.channelsByFolder[a.title] = a.list;
+        state.channels = state.channels.filter(function (c) { return c.folder !== a.title; }).concat(a.list);
+    });
+    state.ytTvCount = add.length;
+}
+
+// Reproduz uma transmissão ao vivo do YouTube dentro da aba TV (sem abrir o app do YouTube)
+function ytPlayLive(channel) {
+    const id = String(channel.url).slice(3);
+    try { stopStream(); el.video.pause(); } catch (e) {}
+    ytInitAudio();
+    ytStopAux();
+    const tok = yt.tok;
+    localStorage.setItem(STORAGE_LAST_CHANNEL_KEY, JSON.stringify(channel));
+    localStorage.setItem('iptv_last_played_folder', state.folders[state.selectedFolderIndex]);
+    const ytc = document.getElementById('youtube-iframe-container');
+    if (ytc) ytc.style.display = 'none';
+    el.video.style.display = 'block';
+    showStatus('Carregando ' + channel.name + '...');
+    ytRace('stream', id, function (r) { return r && (r.hls || (r.muxed && r.muxed.length) || (r.vids.length && r.auds.length)); })
+        .then(function (d) {
+            if (tok !== yt.tok) return;
+            const list = ytBuildSources(d).sort(function (a, b) { return (b.mode === 'hls') - (a.mode === 'hls'); });
+            if (!list.length) throw new Error('sem fonte compatível');
+            ytLiveTry(list, 0, tok, channel);
+        })
+        .catch(function () {
+            if (tok !== yt.tok) return;
+            showStatus('Não foi possível abrir este canal ao vivo agora (os servidores podem estar ocupados, ou a transmissão acabou). Tente outro.', false);
+        });
+}
+
+function ytLiveTry(list, i, tok, channel) {
+    if (tok !== yt.tok) return;
+    const s = list[i];
+    if (!s) {
+        showStatus('Não foi possível abrir este canal ao vivo. Tente outro.', false);
+        return;
+    }
+    const v = el.video;
+    if (s.mode === 'dual') {
+        yt.dual = true;
+        v.muted = true;
+        yt.audio.src = s.a;
+        yt.audio.currentTime = 0;
+    } else {
+        yt.dual = false;
+        v.muted = false;
+        try { yt.audio.pause(); yt.audio.removeAttribute('src'); } catch (e) {}
+    }
+    loadStreamOne(s.mode === 'dual' ? s.v : s.url, {
+        live: true, quick: true, timeout: 25000, forceHls: s.mode === 'hls',
+        onPlaying: function () { if (tok === yt.tok) { hideStatus(); showToast(channel.name, channel.folder); } },
+        onBlocked: function () { showStatus('Pressione OK para reproduzir.', false); },
+        onFail: function () { ytLiveTry(list, i + 1, tok, channel); }
+    });
+}
+
 /* ---------- pastas ---------- */
 function ytFillFolder(f, items) {
     items.forEach(function (it) { ytRegister(it, f.title); });
@@ -402,6 +505,28 @@ function ytRefresh(f) {
 
 // Meta de vídeos por pasta e variações da busca usadas para completar a lista
 const YT_TARGET = 300;
+const YT_RETRY_WAIT = [3000, 6000, 10000, 15000];   // tentativas automáticas quando a busca falha (ms)
+
+// grava a lista da pasta; se faltar espaço no aparelho, apaga as pastas guardadas mais antigas e tenta de novo
+function ytCacheSet(ck, obj) {
+    try { localStorage.setItem(ck, JSON.stringify(obj)); return; } catch (e) {}
+    try {
+        const ks = [];
+        for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i);
+            if (k && k.indexOf('iptv_yt_sec_') === 0 && k !== ck) {
+                let t = 0;
+                try { t = JSON.parse(localStorage.getItem(k)).t || 0; } catch (e) {}
+                ks.push([t, k]);
+            }
+        }
+        ks.sort(function (a, b) { return a[0] - b[0]; });
+        for (let j = 0; j < ks.length && j < 8; j++) {
+            localStorage.removeItem(ks[j][1]);
+            try { localStorage.setItem(ck, JSON.stringify(obj)); return; } catch (e) {}
+        }
+    } catch (e) {}
+}
 const YT_VARIANTS = ['', ' HD', ' 2023', ' 2022', ' 2021', ' 2019', ' legendado', ' grátis', ' melhores', ' online', ' 2018', ' 2017'];
 
 // a lista cresceu em segundo plano: atualiza o total e acrescenta cartões sem mexer na posição da tela
@@ -411,7 +536,11 @@ function ytGrow(f) {
     const g = $v('vod-grid');
     if (!g) return;
     if (g.querySelector('.vod-empty')) { ytRefresh(f); return; }
-    for (let k = 0; k < 3 && g.children.length < GRID_STEP && g.children.length < vod.list.length; k++) loadMore();
+    // acrescenta na tela os cartões novos (até o limite já mostrado; o resto aparece ao rolar)
+    const from = g.children.length, upto = Math.min(vod.shown, vod.list.length);
+    if (from < upto) {
+        g.insertAdjacentHTML('beforeend', vod.list.slice(from, upto).map(function (c, k) { return cardHtml(c, from + k, 'grid'); }).join(''));
+    }
     const t = $v('vod-total'); if (t) t.textContent = 'Total: ' + vod.list.length;
 }
 
@@ -427,7 +556,7 @@ function ytDeepen(f, s, run, all, add, ck) {
                 const fresh = add(ytPick(r, f.min, f.max));
                 if (fresh.length) {
                     ytFillFolder(f, fresh);
-                    lsSet(ck, { t: Date.now(), q: f.q, items: all.slice(0, YT_TARGET) });
+                    ytCacheSet(ck, { t: Date.now(), q: f.q, items: all.slice(0, YT_TARGET) });
                     ytGrow(f);
                 }
                 setTimeout(next, 400);
@@ -445,7 +574,7 @@ function ytEnsureFolder(catId, force) {
     if (s.state === 'ok' && !force) return;
     const ck = 'iptv_yt_sec_' + f.key;
     const c = lsGet(ck, null);
-    const hasCache = c && c.q === f.q && c.items && c.items.length;
+    const hasCache = !!(c && c.q === f.q && c.items && c.items.length);
     const run = s.run = (s.run || 0) + 1;
     const all = [], seen = {};
     const add = function (items) {
@@ -455,31 +584,56 @@ function ytEnsureFolder(catId, force) {
         });
         return fresh;
     };
-    if (!force && hasCache && Date.now() - c.t < YT_TTL) {
+    const save = function () { ytCacheSet(ck, { t: Date.now(), q: f.q, items: all.slice(0, YT_TARGET) }); };
+
+    // 1) Se já existe lista guardada, mostra NA HORA (mesmo velha)
+    if (hasCache) {
         add(c.items);
         ytFillFolder(f, c.items);
         s.state = 'ok';
-        if (all.length < YT_TARGET / 2) ytDeepen(f, s, run, all, add, ck);
-        return;
+        // lista ainda nova: não precisa buscar de novo (só completa se estiver curta)
+        if (!force && Date.now() - c.t < YT_TTL) {
+            if (all.length < YT_TARGET / 2) ytDeepen(f, s, run, all, add, ck);
+            return;
+        }
+    } else {
+        s.state = 'loading';
     }
-    s.state = 'loading';
     s.err = '';
-    ytSearch({ q: f.q, min: f.min, max: f.max, pages: 4, want: 24 }, function (r) { return ytPick(r, f.min, f.max).length > 0; })
-        .then(function (r) {
-            const items = ytPick(r, f.min, f.max);
-            add(items);
-            lsSet(ck, { t: Date.now(), q: f.q, items: all.slice(0, YT_TARGET) });
-            ytFillFolder(f, items);
-            s.state = 'ok';
-        })
-        .catch(function (e) {
-            if (hasCache) { add(c.items); ytFillFolder(f, c.items); s.state = 'ok'; }   // usa a cópia antiga
-            else { s.state = 'fail'; s.err = e && e.message; }
-        })
-        .then(function () {
-            ytRefresh(f);
-            if (s.state === 'ok' && s.run === run && all.length < YT_TARGET) ytDeepen(f, s, run, all, add, ck);
-        });
+    s.attempt = 0;
+
+    // 2) Busca (lista velha ou sem lista). Se falhar, tenta de novo sozinho algumas vezes.
+    const attempt = function (n) {
+        ytSearch({ q: f.q, min: f.min, max: f.max, pages: 4, want: 24 }, function (r) { return ytPick(r, f.min, f.max).length > 0; })
+            .then(function (r) {
+                if (s.run !== run) return;
+                const items = ytPick(r, f.min, f.max);
+                const old = all.slice();
+                all.length = 0;
+                Object.keys(seen).forEach(function (k) { delete seen[k]; });
+                add(items);        // vídeos novos na frente
+                add(old);          // completa com os que já estavam guardados
+                save();
+                ytFillFolder(f, items);
+                s.state = 'ok';
+                s.attempt = 0;
+                if (hasCache) ytGrow(f); else ytRefresh(f);
+                if (all.length < YT_TARGET) ytDeepen(f, s, run, all, add, ck);
+            })
+            .catch(function (e) {
+                if (s.run !== run) return;
+                s.err = e && e.message;
+                if (n < YT_RETRY_WAIT.length) {
+                    if (!hasCache) { s.attempt = n + 1; s.state = 'loading'; ytRefresh(f); }
+                    setTimeout(function () { if (s.run === run) attempt(n + 1); }, YT_RETRY_WAIT[n]);
+                } else if (!hasCache) {
+                    s.state = 'fail';
+                    s.attempt = 0;
+                    ytRefresh(f);
+                }   // com lista guardada: continua mostrando ela e tenta de novo na próxima vez
+            });
+    };
+    attempt(0);
 }
 
 function ytEmptyText() {
@@ -493,7 +647,7 @@ function ytEmptyText() {
     const f = yt.byTitle[vod.catId];
     const s = f && yt.st[f.key];
     if (!s) return null;
-    if (s.state === 'loading') return 'Carregando vídeos do YouTube...';
+    if (s.state === 'loading') return s.attempt ? 'Os servidores estão ocupados. Tentando de novo (' + s.attempt + '/' + YT_RETRY_WAIT.length + ')...' : 'Carregando vídeos do YouTube...';
     if (s.state === 'fail') return 'Não consegui carregar esta pasta. Confira a internet e aperte OK para tentar de novo.' +
         (s.err ? '<br><small>' + esc(String(s.err).split('\n').slice(0, 3).join('  |  ')) + '</small>' : '');
     return null;
@@ -716,6 +870,8 @@ function autoEnterFree() {
 /* ---------- aviso de atualização ---------- */
 function ytCheckUpdate() {
     ytGet(YT_VERSION_URL + '?t=' + Date.now(), 6000).then(function (v) {
+        // O aviso de atualização é só do aplicativo Android (APK). No navegador do computador não aparece.
+        if (!/;\s*wv\)/.test(navigator.userAgent)) return;
         const code = parseInt(v && v.versionCode, 10);
         if (!code || code <= APP_VERSION_CODE || !v.apkUrl) return;
         ytUpdateModal(v);

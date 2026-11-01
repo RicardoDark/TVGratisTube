@@ -272,6 +272,10 @@ function startFromM3U() {
     showStatus('Carregando lista... (só demora na primeira vez)');
     loadTvSource()
         .then(all => {
+            if (state.selectedCategory !== 'tv' || !yt.remoteP) return all;
+            return Promise.race([yt.remoteP, new Promise(function (r) { setTimeout(r, 2500); })]).then(function () { return all; });
+        })
+        .then(all => {
             const cat = state.selectedCategory;
 
             if (cat === 'mixed') {
@@ -285,6 +289,7 @@ function startFromM3U() {
             }
 
             parseM3U(all);
+            if (cat === 'tv') ytInjectTv();
             hideStatus();
 
             if (state.folders.length === 0) {
@@ -770,6 +775,11 @@ function playChannel(channel) {
     if (channelIndex !== -1) {
         const item = document.getElementById(`channel-${channelIndex}`);
         if (item) item.classList.add('selected');
+    }
+
+    if (String(channel.url).indexOf('yt:') === 0) {
+        ytPlayLive(channel);
+        return;
     }
 
     if (channel.url.includes('youtube.com') || channel.url.includes('youtu.be')) {
@@ -1385,6 +1395,15 @@ function handleBackAction() {
    - Para trocar de conta, use o botão "Sair" no canto superior direito.
    ==================================================================== */
 const login = { items: [], idx: 0, busy: false, server: 0 };
+
+// O Android (MainActivity) pergunta isto ao apertar Voltar: se estiver na tela inicial/login,
+// mostra "Você deseja sair?"; senão manda o Voltar para dentro do app.
+window.iptvAtHome = function () {
+    try {
+        if (lk.open || pin.open || state.epgMode || document.getElementById('upd-modal')) return false;
+        return loginVisible() || el.splash.classList.contains('splash-visible');
+    } catch (e) { return false; }
+};
 
 function loginVisible() {
     const s = document.getElementById('login-screen');
@@ -3811,7 +3830,7 @@ function buildTvFavFolder() {
         .slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'pt', { numeric: true, sensitivity: 'base' }); });
     state.channelsByFolder[SEARCH_FOLDER] = [];
     const fi = state.folders.indexOf(FAV_FOLDER);
-    state.folders.splice(fi + 1, 0, ALL_FOLDER);
+    state.folders.splice(fi + 1 + (state.ytTvCount || 0), 0, ALL_FOLDER);   // "TV e YouTube" fica antes de "Canais de A a Z"
     state.folders.unshift(SEARCH_FOLDER);
 }
 

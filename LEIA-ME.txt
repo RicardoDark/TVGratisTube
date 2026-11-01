@@ -1,0 +1,13 @@
+TV Grátis Tube - versão para o computador / site hospedado
+
+Arquivos: index.html, app.js, youtube.js, style.css
+(o hls.min.js continua o mesmo que você já tem hospedado, na mesma pasta)
+
+1) Suba estes 4 arquivos por cima dos antigos no seu hospedamento (GitHub Pages / InfinityFree).
+2) Suba também o update.json novo no GitHub (repositório das regras).
+3) Abra no navegador e aperte Ctrl+F5 para limpar o cache.
+
+No computador: setas e Enter navegam; Esc ou Backspace voltam; o mouse também funciona.
+Aba TV ao Vivo: pasta fixa "TV e YouTube" (canais ao vivo vindos do update.json, campo "tv").
+Aba Séries: a última pasta é "Séries | 24 Horas".
+O aviso de atualização do APK só aparece dentro do aplicativo Android, não no navegador.
