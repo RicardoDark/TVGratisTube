@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>IPTV Premium Player</title>
+    <title>TV Grátis Tube</title>
     <!-- Google Fonts for premium typography -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
-    <script>try{if(localStorage.getItem('iptv_session'))document.documentElement.className+=' has-session';}catch(e){}</script>
-    <link rel="stylesheet" href="style.css?v=21">
+    <script>document.documentElement.className+=' has-session';</script>
+    <link rel="stylesheet" href="style.css?v=30">
     <!-- Local HLS.js Library -->
     <script src="hls.min.js"></script>
 </head>
@@ -59,7 +59,7 @@
     </div>
 
     <!-- Tela de Login (primeira tela do app) -->
-    <div id="login-screen" style="display:none">
+    <div id="login-screen" class="login-visible">
         <div class="login-box">
             <h1 class="login-title">Entrar</h1>
             <div class="login-sub">Acesse o seu servidor IPTV</div>
@@ -85,7 +85,13 @@
             <div id="btn-login" class="login-btn" tabindex="0">Entrar</div>
         </div>
 
-        <div id="btn-free" class="login-free" tabindex="0">TV grátis</div>
+        <div id="btn-free" class="login-free" tabindex="0">TV</div>
+
+        <!-- Login remoto: o painel lê este QR / MAC e envia usuário e senha para o app -->
+        <div id="remote-box" class="remote-box">
+            <img id="remote-qr" class="remote-qr" alt="" referrerpolicy="no-referrer">
+            <div id="remote-mac" class="remote-mac"></div>
+        </div>
     </div>
 
     <!-- Category Selection Splash Screen -->
@@ -118,6 +124,13 @@
                 </svg>
                 <span>Histórico de Filmes e Séries</span>
             </div>
+            <div id="btn-logout" class="status-icon-item" tabindex="0" title="Sair da conta">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                    <polyline points="16 17 21 12 16 7"></polyline>
+                    <line x1="21" y1="12" x2="9" y2="12"></line>
+                </svg>
+            </div>
         </div>
 
         <div class="splash-content-wrapper">
@@ -125,9 +138,11 @@
                 <!-- TV Card -->
                 <div id="btn-tv" class="splash-card tv-card focused" tabindex="0">
                     <div class="splash-card-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect>
-                            <polyline points="17 2 12 7 7 2"></polyline>
+                        <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                            <polyline points="22,7 32,16 42,7"></polyline>
+                            <rect x="7" y="16" width="50" height="40" rx="10"></rect>
+                            <line x1="43" y1="16" x2="43" y2="56"></line>
+                            <path d="M19 27 V45 L33 36 Z"></path>
                         </svg>
                     </div>
                     <span class="splash-card-title">TV ao Vivo</span>
@@ -136,9 +151,11 @@
                 <!-- Movies Card -->
                 <div id="btn-movies" class="splash-card movies-card" tabindex="0">
                     <div class="splash-card-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M22 7l-6 5 6 5V7z"></path>
-                            <rect x="2" y="6" width="14" height="12" rx="2" ry="2"></rect>
+                        <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="19" cy="19" r="8"></circle>
+                            <circle cx="38" cy="19" r="8"></circle>
+                            <rect x="6" y="28" width="38" height="28" rx="7"></rect>
+                            <path d="M44 38 L57 31 V53 L44 46 Z"></path>
                         </svg>
                     </div>
                     <span class="splash-card-title">FILMES</span>
@@ -147,11 +164,15 @@
                 <!-- Series Card -->
                 <div id="btn-series" class="splash-card series-card" tabindex="0">
                     <div class="splash-card-icon">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <circle cx="12" cy="12" r="10"></circle>
-                            <circle cx="12" cy="12" r="3"></circle>
-                            <line x1="12" y1="2" x2="12" y2="9"></line>
-                            <line x1="12" y1="15" x2="12" y2="22"></line>
+                        <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                            <g transform="translate(-1 2)">
+                                <path d="M52 30 A22 22 0 1 0 30 52 H58"></path>
+                                <circle cx="30" cy="19" r="4"></circle>
+                                <circle cx="41" cy="30" r="4"></circle>
+                                <circle cx="30" cy="41" r="4"></circle>
+                                <circle cx="19" cy="30" r="4"></circle>
+                                <circle cx="30" cy="30" r="1.6"></circle>
+                            </g>
                         </svg>
                     </div>
                     <span class="splash-card-title">SERIES</span>
@@ -159,13 +180,20 @@
             </div>
         </div>
 
+        <!-- Servidor em uso e código (MAC) do aparelho -->
+        <div id="splash-device" class="splash-device hidden">
+            <div id="splash-device-srv" class="splash-device-srv"></div>
+            <div id="splash-device-mac" class="splash-device-mac"></div>
+        </div>
+
         <!-- Version Footer -->
-        <div class="splash-version">v1.0.0 &middot; b33</div>
+        <div class="splash-version">v1.5.0</div>
     </div>
 
     <!-- Status & Loading Overlay -->
     <div id="status-container" class="hidden">
         <div class="spinner"></div>
+        <div class="net-speed"></div>
         <div id="status-message">Carregando canais...</div>
     </div>
 
@@ -181,7 +209,7 @@
 
     <!-- Filmes e Séries -->
     <div id="vod-root"></div>
-    <div id="vod-spin" class="vod-spin hidden"><div class="spinner"></div></div>
+    <div id="vod-spin" class="vod-spin hidden"><div class="spinner"></div><div class="net-speed"></div></div>
 
     <!-- Player em tela cheia (Filmes e Séries) -->
     <div id="vod-player-ui">
@@ -211,7 +239,8 @@
         <div class="vod-pui-center" id="vod-pui-center"></div>
     </div>
 
-    <script src="app.js?v=33"></script>
-    <script src="youtube.js?v=5"></script>
+    <script src="nativeplayer.js?v=3"></script>
+    <script src="app.js?v=51"></script>
+    <script src="youtube.js?v=20"></script>
 </body>
 </html>

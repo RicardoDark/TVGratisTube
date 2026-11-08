@@ -2,92 +2,156 @@
    YOUTUBE DENTRO DE FILMES E SÉRIES
    - As pastas de Filmes e Séries buscam vídeos do YouTube (sem anúncios),
      usando os servidores Piped/Invidious que ficam no GitHub.
-   - O botão "IPTV" (ao lado de Pesquisar e Histórico) abre a lista IPTV embutida.
-   - O app abre direto na tela inicial (sem login) e avisa quando há versão nova.
+   - Filmes e Séries abrem onde a pessoa deixou (padrão: YouTube). O botão piscando mostra onde está ("YouTube" ou "TV") e troca para o outro.
+   - O app sempre abre na tela inicial, já com a lista IPTV embutida. A tela de login só abre com o código secreto
+     (direita, esquerda, baixo, cima, 2 vezes). O botão "TV" da tela de login (senha 1289) abre o modo grátis.
    ==================================================================== */
 
 // Versão deste app. Quando o version.json do GitHub tiver um versionCode MAIOR, aparece o aviso de atualização.
-const APP_VERSION_CODE = 1;
+const APP_VERSION_CODE = 6;
 
 // Regras do YouTube (servidores, SponsorBlock, pastas) e verificação de atualização
 const YT_RULES_URL = 'https://raw.githubusercontent.com/RicardoDark/tviptvtube-arquivoderegras/refs/heads/main/update.json';
-const YT_VERSION_URL = 'https://raw.githubusercontent.com/RicardoDark/tviptvtube/refs/heads/main/version.json';
+// Aviso de atualização DESLIGADO (vazio): o link antigo era do app Flames TV e oferecia o APK dele.
+// Para ligar, coloque aqui o link do version.json do SEU GitHub (formato no arquivo version.json do projeto).
+const YT_VERSION_URL = '';
 
-const YT_RES = 720;                       // qualidade preferida
+const YT_RES = 480;                       // qualidade padrão: 480p roda bem nos TV Box fracos (o usuário pode trocar em "Qualidade" e a escolha dele fica guardada)
+const YT_QUAL_KEY = 'iptv_yt_quality';
+const YT_QUAL_LIST = [1080, 720, 480, 360, 240, 144];
+// qualidade escolhida (guardada no aparelho); sem escolha = 480p
+function ytRes() { const q = parseInt(lsGet(YT_QUAL_KEY, YT_RES), 10); return q > 0 ? q : YT_RES; }
 const YT_TTL = 3 * 60 * 60 * 1000;        // a lista guardada é atualizada em segundo plano depois de 3 horas
 const YT_SB_CATS = ['sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview'];
 const LS_YT_REMOTE = 'iptv_yt_remote';
 const LS_YT_CARDS = 'iptv_yt_cards';
 
-// Servidores reserva (usados se o GitHub não responder)
-const YT_DEFAULT_SERVERS = [
-    { type: 'piped', url: 'https://pipedapi.kavin.rocks' },
-    { type: 'piped', url: 'https://pipedapi.leptons.xyz' },
-    { type: 'piped', url: 'https://pipedapi.nosebs.ru' },
-    { type: 'piped', url: 'https://pipedapi.adminforge.de' },
-    { type: 'piped', url: 'https://pipedapi.drgns.space' },
-    { type: 'piped', url: 'https://pipedapi.owo.si' },
-    { type: 'piped', url: 'https://pipedapi.reallyaweso.me' },
-    { type: 'inv', url: 'https://inv.nadeko.net' },
-    { type: 'inv', url: 'https://yewtu.be' }
-];
+// CONFIGURAÇÃO EMBUTIDA NO APP (mesmo formato do update.json do GitHub).
+// - O app funciona sozinho com ela, mesmo sem internet ou se o GitHub estiver fora do ar.
+// - A ORDEM das pastas aqui é a ordem na tela (as pastas "24 Horas" ficam em primeiro).
+// - O GitHub (update.json) só ACRESCENTA o que o app ainda não tem; veja ytMergeConfig().
+// - tipo "movies" = aba FILMES, tipo "series" = aba SERIES. min/max = duração em segundos; "ao_vivo": true = só transmissões ao vivo.
+const YT_BUILTIN = {
+  "versao": 3,
 
-// Pastas. tipo: 'movies' (aba FILMES) ou 'series' (aba SERIES).
-// min/max = duração em segundos. O GitHub (update.json, campo "secoes") pode trocar a busca ("q") e o "min"
-// de qualquer pasta pela "key", ou criar pastas novas (use "tipo": "movies" ou "series").
-const YT_FOLDERS = [
-    // ---- FILMES ----
-    { key: 'filmes', tipo: 'movies', title: 'Filmes | Dublados', q: 'filme completo dublado português', min: 3000 },
-    { key: 'acao', tipo: 'movies', title: 'Filmes | Ação', q: 'filme de ação completo dublado', min: 3000 },
-    { key: 'comedia', tipo: 'movies', title: 'Filmes | Comédia', q: 'filme de comédia completo dublado', min: 3000 },
-    { key: 'terror', tipo: 'movies', title: 'Filmes | Terror', q: 'filme de terror completo dublado', min: 3000 },
-    { key: 'drama', tipo: 'movies', title: 'Filmes | Drama', q: 'filme drama completo dublado', min: 3000 },
-    { key: 'ficcao', tipo: 'movies', title: 'Filmes | Ficção Científica', q: 'filme ficção científica completo dublado', min: 3000 },
-    { key: 'aventura', tipo: 'movies', title: 'Filmes | Aventura', q: 'filme de aventura completo dublado', min: 3000 },
-    { key: 'suspense', tipo: 'movies', title: 'Filmes | Suspense', q: 'filme de suspense thriller completo dublado', min: 3000 },
-    { key: 'romance', tipo: 'movies', title: 'Filmes | Romance', q: 'filme romance completo dublado', min: 3000 },
-    { key: 'faroeste', tipo: 'movies', title: 'Filmes | Faroeste', q: 'filme de faroeste completo dublado', min: 3000 },
-    { key: 'guerra', tipo: 'movies', title: 'Filmes | Guerra', q: 'filme de guerra completo dublado', min: 3000 },
-    { key: 'policial', tipo: 'movies', title: 'Filmes | Policial', q: 'filme policial crime completo dublado', min: 3000 },
-    { key: 'fantasia', tipo: 'movies', title: 'Filmes | Fantasia', q: 'filme de fantasia completo dublado', min: 3000 },
-    { key: 'misterio', tipo: 'movies', title: 'Filmes | Mistério', q: 'filme de mistério completo dublado', min: 3000 },
-    { key: 'artesmarciais', tipo: 'movies', title: 'Filmes | Artes Marciais', q: 'filme artes marciais kung fu completo dublado', min: 3000 },
-    { key: 'animacao', tipo: 'movies', title: 'Filmes | Animação', q: 'filme de animação completo dublado', min: 2400 },
-    { key: 'infantil', tipo: 'movies', title: 'Filmes | Infantil e Família', q: 'filme infantil família completo dublado', min: 2400 },
-    { key: 'classicos', tipo: 'movies', title: 'Filmes | Clássicos', q: 'filme clássico antigo completo dublado', min: 3000 },
-    { key: 'nacionais', tipo: 'movies', title: 'Filmes | Nacionais', q: 'filme nacional brasileiro completo', min: 3000 },
-    // ---- SÉRIES ----
-    { key: 'animes', tipo: 'series', title: 'Séries | Animes', q: 'anime completo dublado português', min: 1200 },
-    { key: 'animesclassicos', tipo: 'series', title: 'Séries | Animes Clássicos', q: 'anime clássico anos 90 episódios dublado', min: 900 },
-    { key: 'desenhos', tipo: 'series', title: 'Séries | Desenhos Clássicos', q: 'desenho animado clássico episódios completos dublado', min: 900 },
-    { key: 'desinfantil', tipo: 'series', title: 'Séries | Desenhos Infantis', q: 'desenho infantil episódios completos', min: 900 },
-    { key: 'novelas', tipo: 'series', title: 'Séries | Novelas', q: 'novela capítulo completo', min: 1500 },
-    { key: 'seriescompletas', tipo: 'series', title: 'Séries | Séries Completas', q: 'série completa dublada episódios', min: 1500 },
-    { key: 'docs', tipo: 'series', title: 'Séries | Documentários', q: 'documentário completo dublado português', min: 1800 },
-    { key: 'animais', tipo: 'series', title: 'Séries | Animais e Vida Selvagem', q: 'documentário animais vida selvagem português', min: 1200 },
-    { key: 'natureza', tipo: 'series', title: 'Séries | Natureza', q: 'documentário natureza paisagens português brasil', min: 1200 },
-    { key: 'historia', tipo: 'series', title: 'Séries | Documentários de História', q: 'documentário história completo dublado', min: 1800 },
-    { key: 'ciencia', tipo: 'series', title: 'Séries | Ciência e Espaço', q: 'documentário espaço universo ciência dublado', min: 1800 },
-    { key: 'crimes', tipo: 'series', title: 'Séries | Crimes Reais', q: 'documentário crimes reais completo', min: 1800 },
-    { key: 'standup', tipo: 'series', title: 'Séries | Stand-up Comedy', q: 'stand up comedy especial completo', min: 1500 },
-    { key: 'clipestop', tipo: 'series', title: 'Clipes | Top Hits Internacionais', q: 'top english hits official music video', min: 120, max: 720 },
-    { key: 'clipespop', tipo: 'series', title: 'Clipes | Pop Internacional', q: 'pop official music video english', min: 120, max: 720 },
-    { key: 'clipesrock', tipo: 'series', title: 'Clipes | Rock Internacional', q: 'rock official music video english', min: 120, max: 720 },
-    { key: 'clipeshiphop', tipo: 'series', title: 'Clipes | Hip Hop e Rap', q: 'hip hop rap official music video english', min: 120, max: 720 },
-    { key: 'clipesdance', tipo: 'series', title: 'Clipes | Eletrônica e Dance', q: 'dance electronic official music video', min: 120, max: 720 },
-    { key: 'clipescountry', tipo: 'series', title: 'Clipes | Country', q: 'country official music video english', min: 120, max: 720 },
-    { key: 'clipes80', tipo: 'series', title: 'Clipes | Anos 80', q: '80s official music video hits', min: 120, max: 720 },
-    { key: 'clipes90', tipo: 'series', title: 'Clipes | Anos 90', q: '90s official music video hits', min: 120, max: 720 },
-    { key: 'clipes2000', tipo: 'series', title: 'Clipes | Anos 2000', q: '2000s official music video hits', min: 120, max: 720 }
-];
+  "servidores": [
+    {"tipo": "piped", "url": "https://pipedapi.kavin.rocks"},
+    {"tipo": "piped", "url": "https://pipedapi.leptons.xyz"},
+    {"tipo": "piped", "url": "https://pipedapi.nosebs.ru"},
+    {"tipo": "piped", "url": "https://pipedapi.adminforge.de"},
+    {"tipo": "piped", "url": "https://pipedapi.drgns.space"},
+    {"tipo": "piped", "url": "https://pipedapi.owo.si"},
+    {"tipo": "piped", "url": "https://pipedapi.reallyaweso.me"},
+    {"tipo": "inv", "url": "https://inv.nadeko.net"},
+    {"tipo": "inv", "url": "https://yewtu.be"}
+  ],
+  "chave_api": "",
+  "sponsorblock": "https://sponsor.ajay.app",
+
+  "_____1_TV_____": "TV AO VIVO. Uma unica pasta: Canais 24 Horas. O app busca no YouTube os canais ao vivo (lista 'buscas'), nao precisa por canal na mao. Para acrescentar um canal fixo: coloque { \"nome\": \"...\", \"id\": \"11 letras do video ao vivo\" } em 'canais'.",
+  "tv": [
+    {
+      "key": "canais24h",
+      "title": "Canais 24 Horas",
+      "buscas": [
+        "canal 24 horas ao vivo ptbr",
+        "tv ao vivo 24 horas ptbr",
+        "notícias ao vivo 24 horas ptbr",
+        "música ao vivo 24 horas ptbr",
+        "desenhos ao vivo 24 horas ptbr",
+        "esportes ao vivo 24 horas ptbr",
+        "filmes e séries ao vivo 24 horas ptbr",
+        "lofi 24/7 ao vivo",
+        "live 24/7 channel"
+      ],
+      "canais": []
+    }
+  ],
+
+  "secoes": [
+    {"_": "=================== 2 - LOCADORA (FILMES) - 24 horas fica em primeiro ==================="},
+    {"key": "24Filmes", "tipo": "movies", "title": "Filmes | 24 Horas", "q": "filmes 24 horas ao vivo dublado", "ao_vivo": true},
+    {"key": "filmes", "tipo": "movies", "title": "Filmes | Dublados", "q": "filme completo dublado português", "min": 3000},
+    {"key": "acao", "tipo": "movies", "title": "Filmes | Ação", "q": "filme de ação completo dublado", "min": 3000},
+    {"key": "comedia", "tipo": "movies", "title": "Filmes | Comédia", "q": "filme de comédia completo dublado", "min": 3000},
+    {"key": "terror", "tipo": "movies", "title": "Filmes | Terror", "q": "filme de terror completo dublado", "min": 3000},
+    {"key": "drama", "tipo": "movies", "title": "Filmes | Drama", "q": "filme drama completo dublado", "min": 3000},
+	{"key": "asiático ", "tipo": "movies", "title": "Filmes | Asiático ", "q": "filmes asiático completo dublado", "min": 3000},
+    {"key": "ficcao", "tipo": "movies", "title": "Filmes | Ficção Científica", "q": "filme ficção científica completo dublado", "min": 3000},
+    {"key": "aventura", "tipo": "movies", "title": "Filmes | Aventura", "q": "filme de aventura completo dublado", "min": 3000},
+    {"key": "suspense", "tipo": "movies", "title": "Filmes | Suspense", "q": "filme de suspense thriller completo dublado", "min": 3000},
+    {"key": "romance", "tipo": "movies", "title": "Filmes | Romance", "q": "filme romance completo dublado", "min": 3000},
+    {"key": "faroeste", "tipo": "movies", "title": "Filmes | Faroeste", "q": "filme de faroeste completo dublado", "min": 3000},
+    {"key": "guerra", "tipo": "movies", "title": "Filmes | Guerra", "q": "filme de guerra completo dublado", "min": 3000},
+    {"key": "policial", "tipo": "movies", "title": "Filmes | Policial", "q": "filme policial crime completo dublado", "min": 3000},
+    {"key": "fantasia", "tipo": "movies", "title": "Filmes | Fantasia", "q": "filme de fantasia completo dublado", "min": 3000},
+    {"key": "misterio", "tipo": "movies", "title": "Filmes | Mistério", "q": "filme de mistério completo dublado", "min": 3000},
+    {"key": "artesmarciais", "tipo": "movies", "title": "Filmes | Artes Marciais", "q": "filme artes marciais kung fu completo dublado", "min": 3000},
+    {"key": "animacao", "tipo": "movies", "title": "Filmes | Animação", "q": "filme de animação completo dublado", "min": 2400},
+    {"key": "infantil", "tipo": "movies", "title": "Filmes | Infantil e Família", "q": "filme infantil família completo dublado", "min": 2400},
+    {"key": "classicos", "tipo": "movies", "title": "Filmes | Clássicos", "q": "filme clássico antigo completo dublado", "min": 3000},
+    {"key": "nacionais", "tipo": "movies", "title": "Filmes | Nacionais", "q": "filme nacional brasileiro completo", "min": 3000},
+	{"key": "envangelicos", "tipo": "movies", "title": "Filmes | envangelicos", "q": "filmes envangelicos completo dublado", "min": 2400},
+    {"_": "=================== 3 - SERIES (24 horas em primeiro, depois series, clipes e videos) ==================="},
+    {"key": "24horas", "tipo": "series", "title": "Séries | 24 Horas", "q": "24 horas ao vivo maratona dublado ptbr", "ao_vivo": true},
+    {"key": "animes", "tipo": "series", "title": "Séries | Animes", "q": "anime completo dublado português", "min": 1200},
+    {"key": "animesclassicos", "tipo": "series", "title": "Séries | Animes Clássicos", "q": "anime clássico anos 90 episódios dublado", "min": 900},
+    {"key": "desenhos", "tipo": "series", "title": "Séries | Desenhos Clássicos", "q": "desenho animado clássico episódios completos dublado", "min": 900},
+    {"key": "desinfantil", "tipo": "series", "title": "Séries | Desenhos Infantis", "q": "desenho infantil episódios completos dublado ptbr", "min": 900},
+    {"key": "novelas", "tipo": "series", "title": "Séries | Novelas", "q": "novela capítulo completo dublado ptbr", "min": 1500},
+    {"key": "seriescompletas", "tipo": "series", "title": "Séries | Séries Completas", "q": "série completa dublada episódios", "min": 1500},
+    {"key": "docs", "tipo": "series", "title": "Séries | Documentários", "q": "documentário completo dublado português", "min": 1800},
+    {"key": "animais", "tipo": "series", "title": "Séries | Animais e Vida Selvagem", "q": "documentário animais vida selvagem português", "min": 1200},
+    {"key": "natureza", "tipo": "series", "title": "Séries | Natureza", "q": "documentário natureza paisagens português brasil", "min": 1200},
+    {"key": "historia", "tipo": "series", "title": "Séries | Documentários de História", "q": "documentário história completo dublado", "min": 1800},
+    {"key": "ciencia", "tipo": "series", "title": "Séries | Ciência e Espaço", "q": "documentário espaço universo ciência dublado", "min": 1800},
+    {"key": "crimes", "tipo": "series", "title": "Séries | Crimes Reais", "q": "documentário crimes reais completo dublado ptbr", "min": 1800},
+	{"key": "Minidramas", "tipo": "series", "title": "Séries | Minidramas", "q": "Minidramas dublado", "min": 1800},
+    {"key": "pegadinha", "tipo": "series", "title": "Videos | pegadinha", "q": "comedia  pegadinha  dublado", "min": 1500},
+    {"key": "clipestop", "tipo": "series", "title": "Clipes | Top Hits Internacionais", "q": "top english hits official music video"},
+    {"key": "clipespop", "tipo": "series", "title": "Clipes | Pop Internacional", "q": "pop official music video english"},
+    {"key": "clipesrock", "tipo": "series", "title": "Clipes | Rock Internacional", "q": "rock official music video english"},
+    {"key": "clipeshiphop", "tipo": "series", "title": "Clipes | Hip Hop e Rap", "q": "hip hop rap official music video english"},
+    {"key": "clipesdance", "tipo": "series", "title": "Clipes | Eletrônica e Dance", "q": "dance electronic official music video"},
+    {"key": "clipescountry", "tipo": "series", "title": "Clipes | Country", "q": "country official music video english"},
+    {"key": "clipes80", "tipo": "series", "title": "Clipes | Anos 80", "q": "80s official music video hits"},
+    {"key": "clipes90", "tipo": "series", "title": "Clipes | Anos 90", "q": "90s official music video hits"},
+    {"key": "clipes2000", "tipo": "series", "title": "Clipes | Anos 2000", "q": "2000s official music video hits"},
+	{"key": "portadosfundos", "tipo": "series", "title": "Videos | porta dos fundos", "q": "porta dos fundos oficial video"},
+    {"key": "galofrito", "tipo": "series", "title": "Videos | galo frito", "q": "galo frito oficial video"},
+    {"key": "nocturnal", "tipo": "series", "title": "Clipes | Nocturnal Records", "q": "Nocturnal Records"},
+    {"key": "Repo!", "tipo": "series", "title": "Clipes | Repo! The Genetic Opera", "q": "Repo! The Genetic Opera Official Video"},
+    {"key": "K-pop", "tipo": "series", "title": "Clipes | K-pop Asian", "q": "kpop girl group official MV"},
+    {"key": "emo", "tipo": "series", "title": "Clipes | Emo", "q": "clip music emo"},
+    {"key": "gothic", "tipo": "series", "title": "Clipes | Gothic", "q": "clip music gothic"},
+	{"key": "Melanie Martinez", "tipo": "series", "title": "Clipes | Melanie Martinez", "q": "Melanie Martinez (Official Video)"},  
+	{"key": "AvrilLavigne", "tipo": "series", "title": "Clipes | Avril Lavigne", "q": "Avril Lavigne  (Official Video)"},
+	{"key": "Guns", "tipo": "series", "title": "Clipes | Guns N' Roses", "q": "Guns N' Roses (Official Video)"},
+	{"key": "TheCure", "tipo": "series", "title": "Clipes | The Cure", "q": "clip The Cure (Official Video)"},
+	{"key": "BlackEyedPeas", "tipo": "series", "title": "Clipes | Black Eyed Peas", "q": "Black Eyed Peas (Official Video)"},
+	{"key": "OfficialVideo", "tipo": "series", "title": "Clipes | Official Video", "q": "Clipes Official Video"},
+	{"key": "brasil", "tipo": "series", "title": "Clipes | Brasil", "q": "official videoclip brasil"},
+	{"key": "parodia", "tipo": "series", "title": "Clipes | Parodia", "q": "parodia video clips"},
+	{"key": "cdzremake", "tipo": "series", "title": "Videos | cdz ia", "q": "CDZ Remake ia ptbr"},
+    {"key": "jogos", "tipo": "series", "title": "Videos | GamePlay", "q": "jogos gamepaly play pt br"},
+    {"key": "dbd", "tipo": "series", "title": "Videos | DBD", "q": "Dead By Daylight no commentary"},
+	{"key": "kof", "tipo": "series", "title": "Videos | KOF", "q": "M. Bizarro"},
+    {"key": "terceiroolho", "tipo": "series", "title": "Videos | Terceiro olho", "q": "Terceiro olho"},
+    {"key": "mantras", "tipo": "series", "title": "Videos | Mantras", "q": "mantras Terceiro olho"},
+    {"key": "noticiasrecentes", "tipo": "series", "title": "Videos | Noticias recentes", "q": "noticias recentes"},
+    {"key": "espiritismo", "tipo": "series", "title": "Videos | Espiritismo", "q": "espiritismo dubloado"}
+  ]
+};
 
 const yt = {
-    servers: YT_DEFAULT_SERVERS.slice(), key: '', sb: 'https://sponsor.ajay.app',
+    servers: [], key: '', sb: 'https://sponsor.ajay.app',
     folders: [], byTitle: {}, st: {}, list: [], seen: {},
     good: 0, goodUrl: '', extra: [], discP: null, discDone: false,
     tok: 0, segs: [], dual: false, audio: null,
+    heights: [], lastD: null,   // resoluções do vídeo atual e última resposta dos servidores (para trocar a qualidade sem buscar de novo)
     remoteP: null, kind: 'movies',
-    tv: [],   // pastas da aba TV (vêm só do update.json do GitHub, campo "tv")
+    tv: [],   // pastas da aba TV (embutidas + novidades do GitHub, campo "tv")
+    tvSt: {}, tvLive: {},   // estado da busca de canais ao vivo e lista encontrada, por pasta de TV
     sq: { state: 'idle' }, sqT: null, sqTok: 0, lastQ: null, lastCards: null
 };
 
@@ -131,51 +195,88 @@ function ytIsoDur(s) {
 }
 function ytDecode(s) { const t = document.createElement('textarea'); t.innerHTML = s || ''; return t.value; }
 
-/* ---------- regras do GitHub ---------- */
-function ytApplyRemote(r) {
-    yt.folders = YT_FOLDERS.map(function (f) { return Object.assign({}, f); });
-    yt.tv = [];
-    if (r && typeof r === 'object') {
-        // Pastas de TV ao vivo (aba "TV ao Vivo"): { title, canais: [ { nome, id | url, logo } ] }
-        if (Array.isArray(r.tv)) {
-            r.tv.forEach(function (p) {
-                if (!p || !p.title || !Array.isArray(p.canais)) return;
-                const canais = [];
-                p.canais.forEach(function (c) {
-                    if (!c) return;
-                    let id = String(c.id || '').trim();
-                    if (!/^[\w-]{11}$/.test(id)) id = ytIdAny(c.url);
-                    if (!id) return;
-                    canais.push({ nome: String(c.nome || c.name || 'Canal ao vivo'), id: id, logo: c.logo ? String(c.logo) : '' });
-                });
-                if (canais.length) yt.tv.push({ title: String(p.title), canais: canais });
-            });
-        }
-        if (Array.isArray(r.servidores)) {
-            const l = r.servidores.map(function (x) {
-                return { type: String((x && (x.tipo || x.type)) || ''), url: String((x && x.url) || '').replace(/\/$/, '') };
-            }).filter(function (x) { return (x.type === 'piped' || x.type === 'inv') && /^https?:\/\//.test(x.url); });
-            if (l.length) { yt.servers = l; yt.good = 0; }
-        }
-        if (typeof r.chave_api === 'string' && r.chave_api.trim()) yt.key = r.chave_api.trim();
-        if (typeof r.sponsorblock === 'string' && /^https?:\/\//.test(r.sponsorblock)) yt.sb = r.sponsorblock.replace(/\/$/, '');
-        if (Array.isArray(r.secoes)) {
-            r.secoes.forEach(function (x) {
-                if (!x || !x.key || !x.q) return;
-                const key = String(x.key).replace(/[^a-z0-9_-]/gi, '');
-                const f = yt.folders.filter(function (y) { return y.key === key; })[0];
-                if (f) {
-                    // o que está no GitHub manda: sem "min"/"max" = mostra vídeos de qualquer tamanho
-                    f.q = String(x.q);
-                    f.min = x.ao_vivo ? -1 : (+x.min || 0);
-                    f.max = +x.max || 0;
-                } else if (x.title) {
-                    const tp = String(x.tipo || x.type || 'movies') === 'series' ? 'series' : 'movies';
-                    yt.folders.push({ key: key, tipo: tp, title: String(x.title), q: String(x.q), min: x.ao_vivo ? -1 : (+x.min || 0), max: +x.max || 0 });
-                }
-            });
-        }
+/* ---------- configuração: embutida no app + novidades do GitHub ---------- */
+// Regra: o app já tem tudo (YT_BUILTIN). O que vem do GitHub só ACRESCENTA o que o app ainda não tem:
+//   - servidor novo (url que ainda não está na lista)
+//   - pasta nova de filmes/séries (key que o app ainda não tem; entra no FIM da lista)
+//   - pasta de TV nova, ou canal novo / busca nova dentro de uma pasta de TV que já existe
+// O que já existe no app é IGNORADO. Exceção: uma pasta do GitHub com "substituir": true troca q/min/max da pasta de mesmo key.
+function ytCleanKey(k) { return String(k || '').replace(/[^a-z0-9_-]/gi, ''); }
+
+// canais colocados à mão: { nome, id | url, logo }
+function ytParseCanais(list) {
+    const out = [];
+    (Array.isArray(list) ? list : []).forEach(function (c) {
+        if (!c) return;
+        let id = String(c.id || '').trim();
+        if (!/^[\w-]{11}$/.test(id)) id = ytIdAny(c.url);
+        if (!id) return;
+        out.push({ nome: String(c.nome || c.name || 'Canal ao vivo'), id: id, logo: c.logo ? String(c.logo) : '' });
+    });
+    return out;
+}
+
+function ytMergeConfig(c) {
+    if (!c || typeof c !== 'object') return;
+
+    if (Array.isArray(c.servidores)) {
+        c.servidores.forEach(function (x) {
+            const type = String((x && (x.tipo || x.type)) || '');
+            const url = String((x && x.url) || '').replace(/\/$/, '');
+            if ((type !== 'piped' && type !== 'inv') || !/^https?:\/\//.test(url)) return;
+            if (yt.servers.some(function (s) { return s.url === url; })) return;
+            yt.servers.push({ type: type, url: url });
+        });
     }
+    if (typeof c.chave_api === 'string' && c.chave_api.trim()) yt.key = c.chave_api.trim();
+    if (typeof c.sponsorblock === 'string' && /^https?:\/\//.test(c.sponsorblock)) yt.sb = c.sponsorblock.replace(/\/$/, '');
+
+    // Pastas de TV ao vivo (aba "TV ao Vivo"): { key, title, buscas: [texto, ...], canais: [ { nome, id | url, logo } ] }
+    // "buscas" = o app procura no YouTube transmissões ao vivo com esses textos; "canais" = canais fixos colocados à mão.
+    if (Array.isArray(c.tv)) {
+        c.tv.forEach(function (p) {
+            if (!p || !p.title) return;
+            const title = String(p.title);
+            const key = ytCleanKey(p.key) || ytCleanKey(title);
+            const canais = ytParseCanais(p.canais);
+            const buscas = [].concat(Array.isArray(p.buscas) ? p.buscas : [], p.q ? [p.q] : [])
+                .map(function (b) { return String(b).trim(); }).filter(Boolean);
+            const cur = yt.tv.filter(function (t) { return t.key === key || t.title === title; })[0];
+            if (cur) {
+                canais.forEach(function (n) { if (!cur.canais.some(function (o) { return o.id === n.id; })) cur.canais.push(n); });
+                buscas.forEach(function (b) { if (cur.buscas.indexOf(b) === -1) cur.buscas.push(b); });
+            } else if (canais.length || buscas.length) {
+                yt.tv.push({ key: key, title: title, canais: canais, buscas: buscas });
+            }
+        });
+    }
+
+    // Pastas de filmes e séries
+    if (Array.isArray(c.secoes)) {
+        c.secoes.forEach(function (x) {
+            if (!x || !x.key || !x.q) return;
+            const key = ytCleanKey(x.key);
+            if (!key) return;
+            const min = x.ao_vivo ? -1 : (+x.min || 0);
+            const f = yt.folders.filter(function (y) { return y.key === key; })[0];
+            if (f) {
+                if (x.substituir === true) { f.q = String(x.q); f.min = min; f.max = +x.max || 0; }
+            } else if (x.title) {
+                const tp = String(x.tipo || x.type || 'movies') === 'series' ? 'series' : 'movies';
+                yt.folders.push({ key: key, tipo: tp, title: String(x.title), q: String(x.q), min: min, max: +x.max || 0 });
+            }
+        });
+    }
+}
+
+function ytApplyRemote(r) {
+    yt.folders = [];
+    yt.tv = [];
+    yt.servers = [];
+    yt.key = '';
+    yt.sb = 'https://sponsor.ajay.app';
+    ytMergeConfig(YT_BUILTIN);   // 1) o que já vem dentro do app
+    ytMergeConfig(r);            // 2) só o que for novo no GitHub (ou na cópia dele guardada no aparelho)
     yt.byTitle = {};
     yt.folders.forEach(function (f) { yt.byTitle[f.title] = f; });
 }
@@ -409,24 +510,55 @@ function ytRemember(card) {
 }
 
 function ytMergeStored() {
+    if (!state.free && vod.src !== 'yt') return;
     const m = lsGet(LS_YT_CARDS, {});
     Object.keys(m).forEach(function (k) { if (!vod.byKey[k]) vod.byKey[k] = Object.assign({}, m[k]); });
 }
 
-/* ---------- TV ao vivo do YouTube (pasta "TV e YouTube", vinda do GitHub) ---------- */
-// Coloca as pastas de TV do GitHub na lista da aba TV ao Vivo (os canais viram "yt:ID")
+/* ---------- TV ao vivo do YouTube (pasta "Canais 24 Horas") ---------- */
+// A pasta junta: canais fixos colocados à mão ("canais") + canais ao vivo que o app acha sozinho no YouTube ("buscas").
+// A lista achada fica guardada no aparelho (abre na hora) e é atualizada em segundo plano.
+const LS_YT_TV = 'iptv_yt_tv_';
+const YT_TV_TTL = 3 * 60 * 60 * 1000;   // depois de 3 horas a lista guardada é buscada de novo
+const YT_TV_MAX = 300;
+
+function ytTvLogo(id) { return 'https://i.ytimg.com/vi/' + id + '/mqdefault_live.jpg'; }
+
+// resultado de busca -> canal da aba TV
+function ytTvChannel(it, title) {
+    const t = ytDecode(it.title || '').trim();
+    const ch = ytDecode(it.channel || '').trim();
+    let name = t || ch || 'Canal ao vivo';
+    if (ch && t && t.toLowerCase().indexOf(ch.toLowerCase()) === -1) name = ch + ' | ' + t;
+    return { id: 'yt_' + it.id, name: name.slice(0, 80), url: 'yt:' + it.id, folder: title, logo: ytTvLogo(it.id) };
+}
+
+function ytTvCached(p) {
+    const c = lsGet(LS_YT_TV + p.key, null);
+    return (c && Array.isArray(c.items)) ? c.items : [];
+}
+
+// lista final da pasta: canais fixos primeiro, depois os achados na busca (sem repetir)
+function ytTvList(p, live) {
+    const seen = {}, out = [];
+    p.canais.map(function (c) {
+        return { id: 'yt_' + c.id, name: c.nome, url: 'yt:' + c.id, folder: p.title, logo: c.logo || ytTvLogo(c.id) };
+    }).concat(live || yt.tvLive[p.key] || ytTvCached(p)).forEach(function (c) {
+        if (!c || !c.url || seen[c.url]) return;
+        seen[c.url] = 1;
+        out.push(Object.assign({}, c, { folder: p.title }));
+    });
+    return out;
+}
+
+// Coloca as pastas de TV na lista da aba TV ao Vivo (os canais viram "yt:ID") e começa a busca dos canais ao vivo
 function ytInjectTv() {
     state.ytTvCount = 0;
     const add = [];
     (yt.tv || []).forEach(function (p) {
-        const list = p.canais.map(function (c) {
-            return {
-                id: 'yt_' + c.id, name: c.nome, url: 'yt:' + c.id, folder: p.title,
-                logo: c.logo || ('https://i.ytimg.com/vi/' + c.id + '/mqdefault_live.jpg')
-            };
-        });
-        if (!list.length) return;
-        add.push({ title: p.title, list: list });
+        const list = ytTvList(p);
+        if (!list.length && !p.buscas.length) return;
+        add.push({ p: p, title: p.title, list: list });
     });
     // fica fixa no topo (logo depois de Favoritos)
     add.slice().reverse().forEach(function (a) {
@@ -436,6 +568,96 @@ function ytInjectTv() {
         state.channels = state.channels.filter(function (c) { return c.folder !== a.title; }).concat(a.list);
     });
     state.ytTvCount = add.length;
+    add.forEach(function (a) { if (a.p.buscas.length) ytTvLoad(a.p); });
+}
+
+// mostra na tela a lista nova da pasta (só se a aba TV está aberta)
+function ytTvApply(p, live) {
+    const list = ytTvList(p, live);
+    if (state.selectedCategory !== 'tv' || state.folders.indexOf(p.title) === -1) return;
+    state.channelsByFolder[p.title] = list;
+    state.channels = state.channels.filter(function (c) { return c.folder !== p.title; }).concat(list);
+    if (state.channelsByFolder[ALL_FOLDER]) {
+        state.channelsByFolder[ALL_FOLDER] = state.channels.filter(function (c) { return !isAdultLocked(c.folder); })
+            .slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'pt', { numeric: true, sensitivity: 'base' }); });
+    }
+    if (state.folders[state.selectedFolderIndex] === p.title) {
+        if (state.focusedChannelIndex >= list.length) state.focusedChannelIndex = Math.max(0, list.length - 1);
+        el.currentFolderTitle.textContent = p.title + ' < ' + list.length + ' >';
+        renderChannels(p.title);
+        updateFocusDOM();
+    }
+}
+
+// texto na pasta enquanto ela está vazia (usado pelo renderChannels do app.js)
+function ytTvHint(folder, n) {
+    if (n) return '';
+    const p = (yt.tv || []).filter(function (t) { return t.title === folder; })[0];
+    if (!p || !p.buscas.length) return '';
+    const s = yt.tvSt[p.key];
+    if (s && s.state === 'fail') return 'Não consegui buscar os canais ao vivo agora. Confira a internet e entre na TV de novo.';
+    if (s && s.attempt) return 'Os servidores estão ocupados. Tentando de novo (' + s.attempt + '/' + YT_RETRY_WAIT.length + ')...';
+    return 'Buscando canais 24 horas ao vivo no YouTube...';
+}
+
+// Procura no YouTube transmissões ao vivo (uma busca por vez, para não sobrecarregar os servidores)
+function ytTvLoad(p) {
+    const s = yt.tvSt[p.key] || (yt.tvSt[p.key] = { state: 'idle' });
+    if (s.state === 'loading') return;
+    const c = lsGet(LS_YT_TV + p.key, null);
+    const hasCache = !!(c && c.items && c.items.length);
+    const same = !!(c && JSON.stringify(c.b) === JSON.stringify(p.buscas));
+    if (hasCache && same && Date.now() - c.t < YT_TV_TTL) { s.state = 'ok'; return; }   // lista ainda nova
+
+    const run = s.run = (s.run || 0) + 1;
+    s.state = 'loading';
+    s.attempt = 0;
+    const fresh = [], seen = {};
+    let qi = 0, fails = 0, shown = hasCache;   // com lista guardada ela já está na tela; sem lista, mostra assim que chegar o primeiro resultado
+
+    const finish = function () {
+        if (s.run !== run) return;
+        if (!fresh.length) {
+            if (s.attempt < YT_RETRY_WAIT.length) {
+                const w = YT_RETRY_WAIT[s.attempt++];
+                ytTvApply(p);
+                setTimeout(function () { if (s.run === run) { qi = 0; next(); } }, w);
+            } else {
+                s.state = 'fail';
+                s.attempt = 0;
+                ytTvApply(p);   // com lista guardada ela continua na tela
+            }
+            return;
+        }
+        s.state = 'ok';
+        s.attempt = 0;
+        const items = fresh.slice(0, YT_TV_MAX);
+        yt.tvLive[p.key] = items;
+        try { localStorage.setItem(LS_YT_TV + p.key, JSON.stringify({ t: Date.now(), b: p.buscas, items: items })); } catch (e) {}
+        ytTvApply(p, items);
+    };
+
+    const next = function () {
+        if (s.run !== run) return;
+        if (qi >= p.buscas.length || fresh.length >= YT_TV_MAX) { finish(); return; }
+        const q = p.buscas[qi++];
+        ytSearch({ q: q, min: -1, max: 0, pages: 3, want: 40 }, function (r) { return ytPick(r, -1, 0).length > 0; })
+            .then(function (r) {
+                if (s.run !== run) return;
+                ytPick(r, -1, 0).forEach(function (it) {
+                    if (!seen[it.id]) { seen[it.id] = 1; fresh.push(ytTvChannel(it, p.title)); }
+                });
+                fails = 0;
+                if (!shown && fresh.length) { shown = true; ytTvApply(p, fresh.slice()); }
+                setTimeout(next, 300);
+            })
+            .catch(function () {
+                // 3 buscas seguidas sem nada (internet fora ou servidores ocupados): para e tenta de novo mais tarde
+                if (++fails >= 3 && !fresh.length) { finish(); return; }
+                setTimeout(next, 600);
+            });
+    };
+    next();
 }
 
 // Reproduz uma transmissão ao vivo do YouTube dentro da aba TV (sem abrir o app do YouTube)
@@ -472,7 +694,13 @@ function ytLiveTry(list, i, tok, channel) {
         return;
     }
     const v = el.video;
-    if (s.mode === 'dual') {
+    if (window.NativeVideo) {
+        // player proprio: ele mesmo junta o video e o audio separados (sem o <audio> auxiliar)
+        yt.dual = false;
+        v.muted = false;
+        NativeVideo.setAudio(s.mode === 'dual' ? s.a : '');
+        NativeVideo.setMaxHeight(ytRes());
+    } else if (s.mode === 'dual') {
         yt.dual = true;
         v.muted = true;
         yt.audio.src = s.a;
@@ -692,9 +920,10 @@ function ytRunSearch() {
 function ytShortLabel(l) { return vod.src === 'yt' ? String(l).replace(/^[^|]*\|\s*/, '') : l; }
 
 function srcBtnHtml() {
+    // O botão mostra onde a pessoa está: "YouTube" (vermelho piscando) ou "TV" (piscando); clicar troca para o outro
     return vod.src === 'yt'
-        ? '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>IPTV'
-        : '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="4"></rect><polygon points="10 9 16 12 10 15 10 9"></polygon></svg>YouTube';
+        ? '<svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="4"></rect><polygon points="10 9 16 12 10 15 10 9"></polygon></svg>YouTube'
+        : '<svg viewBox="0 0 24 24"><rect x="2" y="7" width="20" height="14" rx="2"></rect><polyline points="17 2 12 7 7 2"></polyline></svg>TV';
 }
 
 function ytStart(kind) {
@@ -741,11 +970,16 @@ function ytFromMixed() {
 }
 
 function ytToggleSource() {
+    vod.enterLock = Date.now() + 1500;   // a troca é demorada: ignora OK repetido do controle até a tela nova abrir
+    lsSet('tube_src', vod.src === 'yt' ? 'tv' : 'yt');   // guarda a escolha da pessoa para a próxima vez
     if (vod.src === 'yt') {
+        // Voltar: sai do YouTube e volta para a lista IPTV (pela API do servidor quando há login)
         document.body.classList.remove('yt-on');
         state.selectedCategory = yt.kind;
-        startFromM3U();
+        state.fromYtBack = true;   // se a lista IPTV vier vazia, não volta sozinho para o YouTube
+        if (state.api) startApp(); else startFromM3U();
     } else {
+        ytBootFree();   // carrega as pastas do YouTube na primeira vez (no login normal ainda não foram carregadas)
         hideStatus();
         yt.kind = (state.selectedCategory === 'series') ? 'series' : 'movies';
         ytShow();
@@ -753,17 +987,78 @@ function ytToggleSource() {
 }
 
 /* ---------- reprodução ---------- */
+// Escolhe as resoluções por ordem de proximidade da qualidade preferida (YT_RES):
+// primeiro a própria (480p), depois as menores (360p...), por último as maiores (720p...).
+// Antes só aceitava 720p exato; sem 720p dava "sem fonte compatível".
+function ytHeightsByCloseness(list) {
+    const hs = [];
+    list.forEach(function (s) { if (s.h > 0 && hs.indexOf(s.h) === -1) hs.push(s.h); });
+    const R = ytRes();
+    const below = hs.filter(function (h) { return h <= R; }).sort(function (a, b) { return b - a; });
+    const above = hs.filter(function (h) { return h > R; }).sort(function (a, b) { return a - b; });
+    return below.concat(above);
+}
+
+/* ---------- qualidade do vídeo (botão "Qualidade") ---------- */
+function ytHeightsOf(d) {
+    const hs = [];
+    (d.muxed || []).concat(d.vids || []).forEach(function (s) { if (s.h >= 100 && hs.indexOf(s.h) === -1) hs.push(s.h); });
+    return hs.sort(function (a, b) { return b - a; });
+}
+// resoluções que o vídeo atual tem (do maior para o menor); sem informação, usa a lista padrão
+function ytQualityOptions() {
+    return yt.heights && yt.heights.length ? yt.heights.slice() : YT_QUAL_LIST.slice();
+}
+function ytQualLabel() { return 'Qualidade: ' + ytRes() + 'p'; }
+// dir = -1 baixa a qualidade (menos travadas), +1 sobe; no fim da lista dá a volta
+function ytStepQuality(dir) {
+    const o = ytQualityOptions(), cur = ytRes();
+    let n;
+    if (dir < 0) { n = o.filter(function (h) { return h < cur; })[0]; if (n == null) n = o[0]; }
+    else { const up = o.filter(function (h) { return h > cur; }); n = up.length ? up[up.length - 1] : o[o.length - 1]; }
+    ytSetQuality(n);
+}
+function ytSetQuality(h) {
+    lsSet(YT_QUAL_KEY, h);
+    const b = document.getElementById('vod-qualbtn');
+    if (b) b.innerHTML = ICON_QUAL + ytQualLabel();
+    // recarrega o vídeo que está tocando, no mesmo ponto
+    if (state.vodActive && vod.src === 'yt' && vod.playUrl && String(vod.playUrl).indexOf('yt:') === 0) {
+        const t = el.video.currentTime || 0;
+        ytLoad(String(vod.playUrl).slice(3), t > 5 ? t : 0, true);
+    }
+}
+
 function ytBuildSources(d) {
-    const T = YT_RES, c = [];
-    const m = d.muxed.filter(function (s) { return s.h === T; }).sort(function (a, b) { return b.mp4 - a.mp4; })[0];
-    if (m) c.push({ mode: 'single', url: m.url });
-    const v = d.vids.filter(function (s) { return s.h === T; }).sort(function (a, b) { return (b.avc - a.avc) || (b.mp4 - a.mp4); })[0];
-    const a = d.auds.slice().sort(function (x, y) { return (y.mp4 - x.mp4) || (y.br - x.br); })[0];
+    const c = [];
+    const mp4First = function (a, b) { return (b.mp4 ? 1 : 0) - (a.mp4 ? 1 : 0); };
+    const avcFirst = function (a, b) { return ((b.avc ? 1 : 0) - (a.avc ? 1 : 0)) || mp4First(a, b); };
+
     if (d.hls) c.push({ mode: 'hls', url: d.hls });
-    if (v && a) c.push({ mode: 'dual', v: v.url, a: a.url });
-    const mb = d.muxed.filter(function (s) { return s.h <= T && s.h !== T; }).sort(function (x, y) { return y.h - x.h; })[0];
-    if (mb) c.push({ mode: 'single', url: mb.url });
+
+    // vídeo e áudio já juntos (mais simples e seguro): a qualidade escolhida (480p por padrão) vai primeiro; as outras resoluções ficam de reserva
+    const muxHs = ytHeightsByCloseness(d.muxed).slice(0, 2);
+    const addMux = function (h) {
+        const m = d.muxed.filter(function (s) { return s.h === h; }).sort(mp4First)[0];
+        if (m) c.push({ mode: 'single', url: m.url });
+    };
+    const R = ytRes();
+    if (muxHs[0] === R) addMux(R);
+
+    // vídeo e áudio separados (as 2 resoluções mais próximas da escolhida)
+    const a = d.auds.slice().sort(function (x, y) { return (y.mp4 - x.mp4) || (y.br - x.br); })[0];
+    if (a) {
+        ytHeightsByCloseness(d.vids).slice(0, 2).forEach(function (h) {
+            const v = d.vids.filter(function (s) { return s.h === h; }).sort(avcFirst)[0];
+            if (v) c.push({ mode: 'dual', v: v.url, a: a.url });
+        });
+    }
+
+    muxHs.forEach(function (h) { if (h !== R) addMux(h); });
+
+    // último recurso: qualquer fonte que o servidor tenha mandado (inclusive com altura desconhecida)
     if (!c.length && d.muxed.length) c.push({ mode: 'single', url: d.muxed[0].url });
+    if (!c.length && a && d.vids.length) c.push({ mode: 'dual', v: d.vids[0].url, a: a.url });
     return c;
 }
 
@@ -801,7 +1096,7 @@ function ytInitAudio() {
     });
 }
 
-function ytLoad(id, startAt) {
+function ytLoad(id, startAt, reuse) {
     ytInitAudio();
     ytStopAux();
     const tok = yt.tok;
@@ -812,9 +1107,12 @@ function ytLoad(id, startAt) {
         .then(function (r) { if (tok === yt.tok) yt.segs = (r || []).map(function (x) { return x.segment; }); })
         .catch(function () {});
 
-    ytRace('stream', id, function (r) { return r && (r.muxed.length || (r.vids.length && r.auds.length) || r.hls); })
+    const cached = (reuse && yt.lastD && yt.lastD.id === id && Date.now() - yt.lastD.t < 10 * 60 * 1000) ? Promise.resolve(yt.lastD.d) : null;
+    (cached || ytRace('stream', id, function (r) { return r && (r.muxed.length || (r.vids.length && r.auds.length) || r.hls); }))
         .then(function (d) {
             if (tok !== yt.tok) return;
+            if (!cached) yt.lastD = { id: id, d: d, t: Date.now() };
+            yt.heights = ytHeightsOf(d);
             const list = ytBuildSources(d);
             if (!list.length) throw new Error('sem fonte compatível');
             ytTry(list, 0, tok);
@@ -837,7 +1135,13 @@ function ytTry(list, i, tok) {
     }
     const v = el.video;
     const next = function () { ytTry(list, i + 1, tok); };
-    if (s.mode === 'dual') {
+    if (window.NativeVideo) {
+        // player proprio: ele mesmo junta o video e o audio separados (sem o <audio> auxiliar)
+        yt.dual = false;
+        v.muted = false;
+        NativeVideo.setAudio(s.mode === 'dual' ? s.a : '');
+        NativeVideo.setMaxHeight(ytRes());
+    } else if (s.mode === 'dual') {
         yt.dual = true;
         v.muted = true;
         yt.audio.src = s.a;
@@ -855,23 +1159,21 @@ function ytTry(list, i, tok) {
     });
 }
 
-/* ---------- entrada direta (sem login) ---------- */
-function autoEnterFree() {
-    document.getElementById('login-screen').classList.add('instant');
-    state.api = null;
-    state.m3uUrl = M3U_URL;
-    renderExpiry(null);
-    showSplashAfterLogin();
+/* ---------- modo TV grátis (entra pelo botão TV da tela de login) ---------- */
+function ytBootFree() {
+    // carrega as regras do YouTube e procura os canais ao vivo (só uma vez)
+    if (yt.booted) return;
+    yt.booted = true;
     yt.remoteP = ytLoadRemote();
     ytDiscover();
-    setTimeout(ytCheckUpdate, 1500);
 }
 
 /* ---------- aviso de atualização ---------- */
 function ytCheckUpdate() {
+    // a cada abertura do app já confere o arquivo de regras do GitHub (fica guardado e vale quando abrir o YouTube)
+    if (!yt.booted) { try { ytLoadRemote(); } catch (e) {} }
+    if (!YT_VERSION_URL) return;
     ytGet(YT_VERSION_URL + '?t=' + Date.now(), 6000).then(function (v) {
-        // O aviso de atualização é só do aplicativo Android (APK). No navegador do computador não aparece.
-        if (!/;\s*wv\)/.test(navigator.userAgent)) return;
         const code = parseInt(v && v.versionCode, 10);
         if (!code || code <= APP_VERSION_CODE || !v.apkUrl) return;
         ytUpdateModal(v);

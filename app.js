@@ -39,14 +39,21 @@ const DEFAULT_SERVER = 'https://cinepulse.rtvplay.workers.dev/';
 // Servidores que aparecem na tela de login. A pessoa só vê o NOME; o link fica escondido.
 // Para adicionar o Servidor 4 (ou mais), é só colocar o link aqui.
 const SERVERS = [
-    { name: 'CinePulse', url: 'https://app01.rtvplay.workers.dev/' },
-    { name: 'Power', url: 'https://app02.rtvplay.workers.dev/' },
-    { name: 'P2 player stremio', url: 'https://app03.rtvplay.workers.dev/' }
+    { name: 'Servidor-1', url: 'https://cinepulse.rtvplay.workers.dev/' },
+    { name: 'Servidor-2', url: 'https://power.rtvplay.workers.dev/' },
+    { name: 'Servidor-3', url: 'https://servidor3.rtvplay.workers.dev/' }
     // , { name: 'Servidor 4', url: 'COLOQUE_O_LINK_AQUI' }
 ].filter(function (s) { return s.url && s.url.indexOf('COLOQUE') === -1; });
 
+// Login remoto: o painel (Cloudflare Worker) manda usuário/senha para o app pelo código (MAC) mostrado na tela de login.
+// Se você publicar o worker do login-remoto em outro endereço, troque só este link.
+const REMOTE_URL = 'https://painel-apps-registrados.playvx.workers.dev';
+const REMOTE_POLL_MS = 3000;
+
 // Bloqueio adulto: qualquer pasta/categoria/título com "XXX" fica bloqueado até digitar a senha
-const ADULT_PIN = '1010';
+const ADULT_PIN = '2526';
+const LOGOUT_PIN = '1010';   // senha do cadeado do botão Sair
+const FREE_PIN = '1289';     // senha do cadeado do botão TV (abre o modo grátis)
 const ADULT_FOLDER = 'XXX Adulto';
 const LOCK_ICON = ' \uD83D\uDD12';
 let adultUnlocked = false;   // volta a bloquear sempre que o app é aberto de novo
@@ -84,6 +91,7 @@ let state = {
     m3uCache: {},
     parsed: null,
     api: null,
+    free: false,   // true = modo TV grátis (YouTube); false = IPTV normal com usuário e senha
     fatal: false,
     enterPressed: false,
     enterTimer: null,
@@ -117,7 +125,7 @@ window.addEventListener('DOMContentLoaded', () => {
     el.overlay.classList.add('hidden');
 
     setupSplashNavigation();
-    autoEnterFree();
+    setupLogin();
     setupBackTrap();
 
     // Tela de "Carregando..." demorando: Voltar/Esc cancela e volta ao início
@@ -150,14 +158,16 @@ function splashTopButtons() {
     return [
         document.getElementById('btn-tvfav'),
         document.getElementById('btn-vodfav'),
-        document.getElementById('btn-vodhist')
+        document.getElementById('btn-vodhist'),
+        document.getElementById('btn-logout')
     ];
 }
 
 function splashTopAction(i) {
     if (i === 0) selectCategoryAndStart('tv', { tvFavorites: true });
     else if (i === 1) selectCategoryAndStart('mixed', { vodCat: '__fav' });
-    else selectCategoryAndStart('mixed', { vodCat: '__hist' });
+    else if (i === 2) selectCategoryAndStart('mixed', { vodCat: '__hist' });
+    else askAdultPin(logoutApp, null, { force: true, pin: LOGOUT_PIN, title: 'Sair da conta', sub: 'Digite a senha para sair' });
 }
 
 function updateSplashFocus() {
@@ -203,7 +213,7 @@ function handleSplashKeys(e) {
     } else {
         if (e.key === 'ArrowRight') {
             e.preventDefault();
-            state.splashTopIndex = Math.min(2, state.splashTopIndex + 1);
+            state.splashTopIndex = Math.min(3, state.splashTopIndex + 1);
             updateSplashFocus();
         } else if (e.key === 'ArrowLeft') {
             e.preventDefault();
@@ -222,6 +232,7 @@ function handleSplashKeys(e) {
 
 function selectCategoryAndStart(category, opts) {
     state.selectedCategory = category;
+    state.fromYtBack = false;
     state.startFavorites = !!(opts && opts.tvFavorites);
     state.vodEntryCat = (opts && opts.vodCat) || null;
     document.removeEventListener('keydown', handleSplashKeys);
@@ -235,8 +246,13 @@ function startApp() {
     const cat = state.selectedCategory;
     const wantsVod = (cat === 'movies' || cat === 'series' || cat === 'mixed');
 
-    // Filmes e Séries: pastas do YouTube (o botão IPTV abre a lista embutida)
-    if (cat === 'movies' || cat === 'series') { ytStart(cat); return; }
+    // Filmes e Séries abrem na última escolha da pessoa (padrão: YouTube). O botão piscando mostra onde ela está
+    // ("YouTube" ou "TV") e troca para o outro. A escolha fica guardada em 'tube_src'.
+    if ((cat === 'movies' || cat === 'series') && !state.fromYtBack && typeof ytStart === 'function' && lsGet('tube_src', 'yt') !== 'tv') {
+        ytBootFree();
+        ytStart(cat);
+        return;
+    }
 
     // Filmes e séries: API do servidor com cache (abre na hora se já foi carregado antes).
     if (wantsVod && state.api) {
@@ -281,7 +297,7 @@ function startFromM3U() {
             if (cat === 'mixed') {
                 hideStatus();
                 if (!all.movies.length && !all.series.length) {
-                    if (!ytFromMixed()) fatalStatus(emptyListMessage('filmes e séries', all));
+                    if (!(state.free && ytFromMixed())) fatalStatus(emptyListMessage('filmes e séries', all));
                     return;
                 }
                 startVodMixed();
@@ -289,10 +305,12 @@ function startFromM3U() {
             }
 
             parseM3U(all);
-            if (cat === 'tv') ytInjectTv();
+            if (cat === 'tv' && state.free) ytInjectTv();
             hideStatus();
 
             if (state.folders.length === 0) {
+                // modo grátis sem filmes/séries na lista embutida: abre as pastas do YouTube
+                if (state.free && !state.fromYtBack && (cat === 'movies' || cat === 'series')) { ytStart(cat); return; }
                 const label = cat === 'movies' ? 'filmes' : cat === 'series' ? 'séries' : 'TV';
                 fatalStatus(emptyListMessage(label, all));
                 return;
@@ -323,7 +341,7 @@ function startFromM3U() {
         })
         .catch(err => {
             console.error(err);
-            if (state.selectedCategory === 'mixed' && ytFromMixed()) { hideStatus(); return; }
+            if (state.free && state.selectedCategory === 'mixed' && ytFromMixed()) { hideStatus(); return; }
             fatalStatus('Erro ao carregar a lista IPTV. Verifique a conexão, o usuário, a senha e o link.');
         });
 }
@@ -676,6 +694,14 @@ function renderChannels(folderName) {
         hint.className = 'list-hint';
         hint.textContent = 'Nenhum favorito ainda. Em qualquer canal, segure o OK para adicionar.';
         el.channelsList.appendChild(hint);
+    }
+    // pasta de TV do YouTube ainda vazia: mostra o que está acontecendo (buscando / tentando de novo / falhou)
+    const ytHint = (state.free && typeof ytTvHint === 'function') ? ytTvHint(folderName, folderChannels.length) : '';
+    if (ytHint) {
+        const h = document.createElement('div');
+        h.className = 'list-hint';
+        h.textContent = ytHint;
+        el.channelsList.appendChild(h);
     }
     epgFillNow();
 }
@@ -1030,7 +1056,10 @@ function epgKeys(e) {
             epg.timer = setTimeout(function () { if (state.epgMode) epgLoadFor(list[state.focusedChannelIndex]); }, 350);
         } else if (k === 'ArrowRight' && epg.days.length) { epg.zone = 'days'; epgRender(); }
         else if (k === 'ArrowLeft') closeEpg();
-        else if (k === 'Enter' && list[state.focusedChannelIndex]) startEnterPress(list[state.focusedChannelIndex]);
+        else if (k === 'Enter' && list[state.focusedChannelIndex]) {
+            if (!e.repeat) { clearTimeout(state.enterTimer); clearTimeout(state.enterFallback); state.enterPressed = false; }
+            startEnterPress(list[state.focusedChannelIndex]);
+        }
     } else if (epg.zone === 'days') {
         if (dir) { epg.dayIdx = Math.max(0, Math.min(epg.days.length - 1, epg.dayIdx + dir)); epg.progIdx = 0; epgRender(); }
         else if (k === 'ArrowRight' || k === 'Enter') { epg.zone = 'progs'; epg.progIdx = 0; epgRender(); }
@@ -1191,6 +1220,7 @@ function setupKeyboardNavigation() {
                     selectFolder(state.focusedFolderIndex, true);
                     updateFocusDOM();
                 } else {
+                    if (!e.repeat) { clearTimeout(state.enterTimer); clearTimeout(state.enterFallback); state.enterPressed = false; }
                     startEnterPress(currentFolderChannels[state.focusedChannelIndex]);
                 }
                 break;
@@ -1282,10 +1312,70 @@ function showStatus(message, showRetry = false) {
     } else {
         if (spinner) spinner.classList.remove('hidden');
     }
+    const ns = el.status.querySelector('.net-speed');
+    if (ns) ns.style.display = showRetry ? 'none' : '';
+    netSpeedUpdate();
 }
 
 function hideStatus() {
     el.status.classList.add('hidden');
+    netSpeedUpdate();
+}
+
+/* ---------- velocidade da internet (KB/s) embaixo da bolinha de carregamento ----------
+   No Android lê o tráfego real do app (AndroidNet.rx, em MainActivity). No navegador do PC
+   (teste) não existe esse dado: mostra uma estimativa da conexão (navigator.connection), com "~". */
+const netSpeed = { timer: null, last: -1, lastT: 0, shown: 0 };
+
+function netRxBytes() {
+    try { if (window.AndroidNet && typeof window.AndroidNet.rx === 'function') return +window.AndroidNet.rx(); } catch (e) {}
+    return -1;
+}
+
+function netSpeedVisible() {
+    const a = document.getElementById('vod-spin');
+    const b = document.getElementById('status-container');
+    return (a && !a.classList.contains('hidden')) || (b && !b.classList.contains('hidden'));
+}
+
+function netSpeedText(kb, approx) {
+    return (approx ? '~ ' : '') + Math.round(kb).toLocaleString('pt-BR') + ' KB/s';
+}
+
+function netSpeedPaint(text) {
+    const list = document.querySelectorAll('.net-speed');
+    for (let i = 0; i < list.length; i++) list[i].textContent = text;
+}
+
+function netSpeedTick() {
+    const now = Date.now();
+    const rx = netRxBytes();
+    if (rx >= 0) {
+        if (netSpeed.last >= 0 && now > netSpeed.lastT) {
+            const kb = Math.max(0, (rx - netSpeed.last) / 1024 / ((now - netSpeed.lastT) / 1000));
+            netSpeed.shown = netSpeed.shown ? (netSpeed.shown * 0.4 + kb * 0.6) : kb;   // suaviza o número
+            netSpeedPaint(netSpeedText(netSpeed.shown, false));
+        } else {
+            netSpeedPaint('0 KB/s');
+        }
+        netSpeed.last = rx; netSpeed.lastT = now;
+    } else {
+        const c = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+        if (c && c.downlink) netSpeedPaint(netSpeedText(c.downlink * 125, true));   // Mbps -> KB/s (estimativa)
+        else netSpeedPaint('-- KB/s');
+    }
+}
+
+function netSpeedUpdate() {
+    if (netSpeedVisible()) {
+        if (netSpeed.timer) return;
+        netSpeed.last = -1; netSpeed.shown = 0;
+        netSpeedTick();
+        netSpeed.timer = setInterval(netSpeedTick, 1000);
+    } else if (netSpeed.timer) {
+        clearInterval(netSpeed.timer);
+        netSpeed.timer = null;
+    }
 }
 
 let toastTimeout = null;
@@ -1351,6 +1441,13 @@ function setupBackTrap() {
 }
 
 
+// Para qualquer video/canal que esteja tocando (inclusive o player nativo LibVLC)
+function stopAllPlayback() {
+    try { stopStream(); } catch (e) {}
+    try { el.video.pause(); el.video.removeAttribute('src'); el.video.load(); } catch (e) {}
+    try { if (window.AndroidPlayer) window.AndroidPlayer.stop(); } catch (e) {}
+}
+
 function handleBackAction() {
     if (lk.open) { lkClose(); return true; }
     if (pin.open) { pinClose(false); return true; }
@@ -1367,9 +1464,10 @@ function handleBackAction() {
         return true;
     }
     // Tela de erro: volta para o início
-    if (state.fatal) { window.location.reload(); return true; }
+    if (state.fatal) { stopAllPlayback(); window.location.reload(); return true; }
     // Carregando e travou? Voltar recarrega o app (volta para a tela inicial)
     if (!state.vodActive && !state.isMenuVisible && el.status && !el.status.classList.contains('hidden')) {
+        stopAllPlayback();
         window.location.reload();
         return true;
     }
@@ -1384,6 +1482,7 @@ function handleBackAction() {
         return true;
     } else {
         // volta para a tela inicial (o login continua salvo)
+        stopAllPlayback();
         window.location.reload();
         return true;
     }
@@ -1421,8 +1520,10 @@ function readSession() {
 }
 function saveSession(s) { try { localStorage.setItem(SESSION_KEY, JSON.stringify(s)); } catch (e) {} }
 
+// Sair: apaga o login e recarrega já na tela de login (a lista embutida volta no próximo início do app)
+const LOGIN_NEXT_KEY = 'tube_show_login';
 function logoutApp() {
-    try { localStorage.removeItem(SESSION_KEY); } catch (e) {}
+    try { localStorage.removeItem(SESSION_KEY); localStorage.setItem(LOGIN_NEXT_KEY, '1'); } catch (e) {}
     window.location.reload();
 }
 
@@ -1476,7 +1577,8 @@ function loadM3U(url) {
 /* ====================================================================
    BLOQUEIO ADULTO (senha numérica na tela, funciona com o controle remoto)
    ==================================================================== */
-const pin = { open: false, value: '', idx: 4, onOk: null, onCancel: null, box: null, keys: [], force: false };
+const PIN_TIMEOUT_MS = 7000;   // tempo máximo para digitar a senha; passou disso o cadeado some
+const pin = { open: false, value: '', idx: 4, onOk: null, onCancel: null, box: null, keys: [], force: false, code: null, timer: null };
 const PIN_KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'APAGAR', '0', 'SAIR'];
 
 // Palavras que bloqueiam (pode editar a lista). Ignora acentos e maiúsculas.
@@ -1494,6 +1596,7 @@ function askAdultPin(onOk, onCancel, opts) {
     if (pin.open) return;
     pin.open = true;
     pin.force = force;
+    pin.code = (opts && opts.pin) || null;   // senha própria deste cadeado (senão usa a do conteúdo adulto)
     pin.value = '';
     pin.idx = 4;
     pin.onOk = onOk || null;
@@ -1526,14 +1629,18 @@ function askAdultPin(onOk, onCancel, opts) {
     window.addEventListener('keydown', pinKeys, true);   // captura: bloqueia o resto do app enquanto aberto
     pinDots();
     pinFocus();
+    // 7 segundos para digitar; se não digitar a senha completa, o cadeado some
+    pin.timer = setTimeout(function () { pinClose(false); }, PIN_TIMEOUT_MS);
 }
 
 function pinClose(ok) {
     if (!pin.open) return;
+    if (pin.timer) { clearTimeout(pin.timer); pin.timer = null; }
     window.removeEventListener('keydown', pinKeys, true);
     if (pin.box && pin.box.parentNode) pin.box.parentNode.removeChild(pin.box);
     pin.open = false;
     pin.box = null;
+    pin.code = null;
     const cb = ok ? pin.onOk : pin.onCancel;
     if (ok && !pin.force) adultUnlocked = true;
     pin.onOk = pin.onCancel = null;
@@ -1563,10 +1670,9 @@ function pinPress(k) {
     if (pin.value.length === 4) {
         setTimeout(function () {
             if (!pin.open) return;
-            if (pin.value === ADULT_PIN) { pinClose(true); return; }
-            pin.value = '';
-            pinDots();
-            if (err) err.textContent = 'Senha incorreta';
+            if (pin.value === (pin.code || ADULT_PIN)) { pinClose(true); return; }
+            // senha errada: o cadeado some
+            pinClose(false);
         }, 150);
     }
 }
@@ -1589,6 +1695,145 @@ function pinKeys(e) {
     else return;
     pin.idx = r * 3 + c;
     pinFocus();
+}
+
+/* ====================================================================
+   LOGIN REMOTO (MAC + QR na tela de login; o painel envia usuário e senha)
+   ==================================================================== */
+let remoteTimer = null;
+
+// código do aparelho: 12 hex. No Android vem do ANDROID_ID; no navegador do PC fica guardado.
+function deviceCode() {
+    try {
+        if (window.AndroidDevice && typeof window.AndroidDevice.code === 'function') {
+            const c = String(window.AndroidDevice.code() || '').toUpperCase().replace(/[^0-9A-F]/g, '');
+            if (c.length === 12) return c;
+        }
+    } catch (e) {}
+    let c = '';
+    try { c = localStorage.getItem('flames_dev_code') || ''; } catch (e) {}
+    if (!/^[0-9A-F]{12}$/.test(c)) {
+        c = '';
+        for (let i = 0; i < 12; i++) c += '0123456789ABCDEF'.charAt(Math.floor(Math.random() * 16));
+        try { localStorage.setItem('flames_dev_code', c); } catch (e) {}
+    }
+    return c;
+}
+function deviceKey() {
+    try {
+        if (window.AndroidDevice && typeof window.AndroidDevice.key === 'function') {
+            const c = String(window.AndroidDevice.key() || '').toUpperCase().replace(/[^0-9A-F]/g, '');
+            if (c.length === 12) return c;
+        }
+    } catch (e) {}
+    let c = '';
+    try { c = localStorage.getItem('flames_dev_key') || ''; } catch (e) {}
+    if (!/^[0-9A-F]{12}$/.test(c)) {
+        c = '';
+        for (let i = 0; i < 12; i++) c += '0123456789ABCDEF'.charAt(Math.floor(Math.random() * 16));
+        try { localStorage.setItem('flames_dev_key', c); } catch (e) {}
+    }
+    return c;
+}
+function prettyCode(c) { return String(c).replace(/(..)(?!$)/g, '$1:'); }
+
+function remoteStart() {
+    const code = deviceCode();
+    const mac = document.getElementById('remote-mac');
+    const img = document.getElementById('remote-qr');
+    if (mac) mac.textContent = prettyCode(code);
+    if (img) {
+        img.classList.add('off');
+        img.onload = function () { img.classList.remove('off'); };
+        img.onerror = function () { img.classList.add('off'); };
+        img.src = REMOTE_URL + '/api/qr?mac=' + code + '&k=' + deviceKey();
+    }
+    remoteStop();
+    remoteTimer = setInterval(remotePoll, REMOTE_POLL_MS);
+}
+function remoteStop() {
+    if (remoteTimer) { clearInterval(remoteTimer); remoteTimer = null; }
+}
+
+let remoteBusy = false;
+function remotePoll() {
+    if (remoteBusy || login.busy || !loginVisible()) {
+        if (!loginVisible()) remoteStop();
+        return;
+    }
+    remoteBusy = true;
+    fetchTimeout(REMOTE_URL + '/api/poll?mac=' + deviceCode() + '&t=' + Date.now(), 6000)
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+            if (!d || !d.ok || !d.user || !d.pass) return;
+            remoteApply(d);
+        })
+        .catch(function () {})
+        .then(function () { remoteBusy = false; });
+}
+
+// preenche os campos com o que o painel mandou e aperta Entrar
+function remoteApply(d) {
+    try { if (lk.open) lkClose(); } catch (e) {}
+    document.getElementById('login-user').value = String(d.user);
+    document.getElementById('login-pass').value = String(d.pass);
+    document.getElementById('login-custom').value = String(d.link || '');
+    if (SERVERS.length) {
+        const n = parseInt(d.server, 10);
+        login.server = (isFinite(n) && n >= 0 && n < SERVERS.length) ? n : 0;
+        renderServerPick();
+    }
+    doLogin();
+}
+
+// tela inicial: "Servidor-2" + MAC (embaixo, no centro)
+function renderDeviceInfo() {
+    const box = document.getElementById('splash-device');
+    if (!box) return;
+    const s = readSession();
+    let srv = '';
+    if (s && s.mode === 'xtream' && !s.def) {
+        srv = 'Link personalizado';
+        for (let i = 0; i < SERVERS.length; i++) {
+            if (normalizeServer(SERVERS[i].url) === normalizeServer(s.link)) { srv = SERVERS[i].name; break; }
+        }
+    }
+    document.getElementById('splash-device-srv').textContent = srv;
+    document.getElementById('splash-device-mac').textContent = prettyCode(deviceCode());
+    box.classList.remove('hidden');
+}
+
+/* ---------- cadastro permanente (painel de clientes) ----------
+   Ao abrir o app: pergunta ao painel se este MAC está cadastrado.
+   - na tela de login: entra sozinho com o usuário/senha cadastrados;
+   - já logado: se o cadastro mudou (usuário/senha diferentes), sai e entra com o novo.
+   Depois, a cada 10 min avisa o painel que o app está aberto (status Online). */
+let regPingTimer = null;
+function regStart() {
+    const q = '?mac=' + deviceCode() + '&k=' + deviceKey();
+    fetchTimeout(REMOTE_URL + '/api/device' + q + '&t=' + Date.now(), 8000)
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+            if (!d || !d.ok || !d.user || !d.pass) return;
+            if (loginVisible()) { remoteApply(d); return; }
+            const s = readSession();
+            if (s && (s.def || (s.mode === 'xtream' && (s.user !== String(d.user) || s.pass !== String(d.pass))))) {
+                // conta cadastrada no painel: guarda como login e recarrega (sem passar pela tela de login)
+                let link = String(d.link || '');
+                if (!link && SERVERS.length) {
+                    const n = parseInt(d.server, 10);
+                    link = SERVERS[(isFinite(n) && n >= 0 && n < SERVERS.length) ? n : 0].url;
+                }
+                if (!link) return;
+                saveSession({ mode: 'xtream', user: String(d.user), pass: String(d.pass), link: normalizeServer(link), api: true, exp: null });
+                window.location.reload();
+            }
+        })
+        .catch(function () {});
+    if (regPingTimer) clearInterval(regPingTimer);
+    regPingTimer = setInterval(function () {
+        fetchTimeout(REMOTE_URL + '/api/ping' + q + '&t=' + Date.now(), 8000).catch(function () {});
+    }, 600000);
 }
 
 /* ---------- tela de login ---------- */
@@ -1635,14 +1880,68 @@ function setupLogin() {
     btnLogin.addEventListener('click', doLogin);
     btnFree.addEventListener('click', enterFree);
 
-    const sess = readSession();
-    if (sess) {
-        resumeSession(sess);   // já logado: vai direto para a tela inicial
+    // O app SEMPRE abre na tela inicial (TV ao Vivo / Filmes / Séries).
+    // Sem login salvo (ou com o login padrão), entra sozinho com a lista IPTV embutida (DEFAULT_USER/DEFAULT_PASS/Servidor-1).
+    // A tela de login só aparece com o código secreto (veja setupSecretCode).
+    let goLogin = false;
+    try { goLogin = localStorage.getItem(LOGIN_NEXT_KEY) === '1'; localStorage.removeItem(LOGIN_NEXT_KEY); } catch (e) {}
+    if (goLogin) {   // veio do botão Sair: abre a tela de login
+        document.getElementById('login-screen').classList.add('instant');
+        showLoginScreen();
+        regStart();
+        setupSecretCode();
         return;
     }
+    let sess = readSession();
+    if (!sess || sess.def) {
+        sess = defaultSession();
+        saveSession(sess);
+    }
+    resumeSession(sess);
+    regStart();
+    setupSecretCode();
+}
+
+// Login padrão: a lista IPTV que já vem no app
+function defaultSession() {
+    // mesmo caminho do botão "TV" (senha 1289), que já funciona: lista embutida + YouTube
+    return { mode: 'free', def: true };
+}
+
+/* ---------- código secreto: abre a tela de login ----------
+   Na tela inicial: direita, esquerda, baixo, cima, direita, esquerda, baixo, cima (2 vezes a sequência). */
+const SECRET_SEQ = ['ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp', 'ArrowRight', 'ArrowLeft', 'ArrowDown', 'ArrowUp'];
+const SECRET_GAP_MS = 3000;   // tempo máximo entre uma tecla e outra
+function setupSecretCode() {
+    let buf = [];
+    let last = 0;
+    document.addEventListener('keydown', function (e) {
+        if (!el.splash.classList.contains('splash-visible') || el.splash.classList.contains('hidden')) { buf = []; return; }
+        try { if (lk.open || pin.open || document.getElementById('upd-modal')) { buf = []; return; } } catch (err) {}
+        if (e.key.indexOf('Arrow') !== 0) { buf = []; return; }
+        const now = Date.now();
+        if (now - last > SECRET_GAP_MS) buf = [];
+        last = now;
+        buf.push(e.key);
+        if (buf.length > SECRET_SEQ.length) buf.shift();
+        if (buf.length === SECRET_SEQ.length && buf.every(function (k, i) { return k === SECRET_SEQ[i]; })) {
+            buf = [];
+            e.preventDefault();
+            setTimeout(showLoginScreen, 0);
+        }
+    }, true);
+}
+
+function showLoginScreen() {
     document.documentElement.classList.remove('has-session');
+    const ls = document.getElementById('login-screen');
+    ls.style.display = '';
+    ls.classList.add('login-visible');
+    el.splash.classList.remove('splash-visible');
+    document.removeEventListener('keydown', handleLoginKeys);
     document.addEventListener('keydown', handleLoginKeys);
     loginFocus(4);
+    remoteStart();
 }
 
 function loginFocus(i) {
@@ -1989,29 +2288,36 @@ function showSplashAfterLogin() {
     setTimeout(function () { ls.style.display = 'none'; }, 450);
     document.removeEventListener('keydown', handleLoginKeys);
     if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+    remoteStop();
+    renderDeviceInfo();
     el.splash.classList.add('splash-visible');
     state.splashZone = 'cards';
     state.splashFocusIndex = 0;
     updateSplashFocus();
     setTimeout(prefetchAll, 800);   // baixa/atualiza as listas em segundo plano
+    if (typeof ytCheckUpdate === 'function') setTimeout(ytCheckUpdate, 1500);   // aviso de versão nova (vale nos dois modos)
 }
 
 // Abre direto na tela inicial usando o último login que deu certo
 function resumeSession(s) {
     document.getElementById('login-screen').classList.add('instant');
     if (s.mode === 'free') {
+        state.free = true;
         state.api = null;
         state.m3uUrl = M3U_URL;
         renderExpiry(null);
         showSplashAfterLogin();
+        ytBootFree();
         return;
     }
+    state.free = false;
     const base = normalizeServer(s.link);
     state.m3uUrl = m3uUrlFor(base, s.user, s.pass);
     state.api = s.api ? { base: base, user: s.user, pass: s.pass } : null;
-    if (s.api) renderExpiry({ exp_date: s.exp });
+    if (s.def) renderExpiry(null);
+    else if (s.api) renderExpiry({ exp_date: s.exp });
     showSplashAfterLogin();
-    if (s.api) refreshExpiry(s);   // atualiza a data em segundo plano, sem atrapalhar
+    if (s.api && !s.def) refreshExpiry(s);   // atualiza a data em segundo plano, sem atrapalhar
 }
 
 function refreshExpiry(s) {
@@ -2031,11 +2337,16 @@ function refreshExpiry(s) {
 // Botão "TV grátis": usa a lista que já vem embutida no app
 function enterFree() {
     if (login.busy) return;
-    state.api = null;
-    state.m3uUrl = M3U_URL;
-    saveSession({ mode: 'free' });
-    renderExpiry(null);
-    showSplashAfterLogin();
+    // cadeado: pede 4 dígitos (1289) antes de abrir o modo grátis
+    askAdultPin(function () {
+        state.free = true;
+        state.api = null;
+        state.m3uUrl = M3U_URL;
+        saveSession({ mode: 'free' });
+        renderExpiry(null);
+        showSplashAfterLogin();
+        ytBootFree();
+    }, null, { force: true, pin: FREE_PIN, title: 'TV', sub: 'Digite a senha para entrar' });
 }
 
 // Aceita link colado inteiro (ex.: http://site.com:8080/get.php?username=X&password=Y...)
@@ -2671,6 +2982,7 @@ const vod = {
 const ICON_SEARCH = '<svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.5" y2="16.5"></line></svg>';
 const ICON_CLOCK = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>';
 const ICON_FS = '<svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"></path></svg>';
+const ICON_QUAL = '<svg viewBox="0 0 24 24"><rect x="2.5" y="5" width="19" height="14" rx="2.5"></rect><path d="M7 15V9M7 12h3M10 15V9M14.5 9h2a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-2z"></path></svg>';
 const ICON_HEART = '<svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"></path></svg>';
 const ICON_PAUSE = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5"></circle><line x1="9.5" y1="8" x2="9.5" y2="16"></line><line x1="14.5" y1="8" x2="14.5" y2="16"></line></svg>';
 const ICON_PLAY = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10.5"></circle><polygon points="10 8 16 12 10 16 10 8"></polygon></svg>';
@@ -2830,6 +3142,7 @@ function migrateVodStores() {
 }
 
 function startVod(sets, entryCat) {
+    stopAllPlayback();   // canal da TV nao pode continuar tocando ao abrir Filmes/Series
     vod.src = 'iptv';
     document.body.classList.remove('yt-on');
     if (!sets) sets = [{ kind: state.selectedCategory, channels: state.channels }];
@@ -2889,6 +3202,7 @@ function vodActivate() {
 
 /* ---------- tela principal (categorias + capas) ---------- */
 function vodShowHome(zone, idx) {
+    vod.enterLock = Date.now() + 450;   // ignora OK repetido logo após trocar de tela
     vod.view = 'home';
     if (vod.src === 'yt') ytEnsureFolder(vod.catId);
     vod.list = getCatList(vod.catId);
@@ -2905,7 +3219,7 @@ function vodShowHome(zone, idx) {
             '<div class="vod-top">' +
               '<div class="vod-btn" data-z="top" data-i="0">' + ICON_SEARCH + 'Pesquisar</div>' +
               '<div class="vod-btn" data-z="top" data-i="1">' + ICON_CLOCK + 'Histórico</div>' +
-              '<div class="vod-btn" data-z="top" data-i="2">' + srcBtnHtml() + '</div>' +
+              '<div class="vod-btn' + (vod.src === 'yt' ? ' vod-ytbtn' : ' vod-back') + '" data-z="top" data-i="2">' + srcBtnHtml() + '</div>' +
               '<div class="vod-spacer"></div>' +
               '<div class="vod-catlabel" id="vod-catlabel"></div>' +
               '<div class="vod-total" id="vod-total"></div>' +
@@ -3032,6 +3346,7 @@ function applyFocus() {
 
 /* ---------- pesquisa com teclado virtual ---------- */
 function vodShowSearch(zone, idx) {
+    vod.enterLock = Date.now() + 450;   // ignora OK repetido logo após trocar de tela
     vod.view = 'search';
     vod.shown = GRID_STEP;
     $v('vod-root').innerHTML =
@@ -3164,7 +3479,11 @@ function homeKeys(e) {
         else if (k === 'ArrowRight' || k === 'Enter') {
             flushCat();
             if (vod.list.length) { vod.zone = 'grid'; vod.idx = 0; applyFocus(); }
-            else if (vod.src === 'yt') ytEnsureFolder(vod.catId, true);
+            else {
+                if (vod.src === 'yt') ytEnsureFolder(vod.catId, true);
+                // pasta vazia (ex.: Favoritos sem nada): seta para a direita vai para os botões do topo (Voltar no YouTube)
+                if (k === 'ArrowRight') { vod.zone = 'top'; vod.idx = (vod.src === 'yt') ? 2 : 0; applyFocus(); }
+            }
         }
     } else if (vod.zone === 'top') {
         if (k === 'ArrowLeft') {
@@ -3236,6 +3555,7 @@ function vodBack() {
         return true;
     }
     // Lista de filmes/séries (ou categorias): Voltar vai direto para a tela inicial
+    stopAllPlayback();
     window.location.reload();
     return true;
 }
@@ -3249,6 +3569,9 @@ function vodKeys(e) {
         vodBack();
         return;
     }
+    // OK do controle manda a tecla repetida: sem isto, o 1º OK troca a tela (YouTube/Voltar, Histórico...)
+    // e o OK repetido já abre o primeiro vídeo da tela nova. Ignora repetição e o instante logo após trocar de tela.
+    if (e.key === 'Enter' && (e.repeat || Date.now() < (vod.enterLock || 0))) { e.preventDefault(); return; }
     if (vod.view === 'home') homeKeys(e);
     else if (vod.view === 'search') searchKeys(e);
     else if (vod.view === 'detail') detailKeys(e);
@@ -3276,6 +3599,7 @@ function computeRelated(card) {
 }
 
 function vodOpenDetail(card, pushCurrent) {
+    vod.enterLock = Date.now() + 450;   // ignora OK repetido logo após trocar de tela
     if (card.kind === 'series' && card.lazy && !card.loaded) {
         const token = ++vod.openToken;
         vodSpin(true);
@@ -3355,6 +3679,8 @@ function renderDetail() {
               '<div class="vod-actions">' +
                 '<div class="vod-act" data-z="act" data-i="0">' + ICON_FS + 'Tela Cheia</div>' +
                 '<div class="vod-act' + (isFav(c) ? ' isfav' : '') + '" id="vod-favbtn" data-z="act" data-i="1">' + favButtonHtml() + '</div>' +
+                (vod.src === 'yt' && typeof ytStepQuality === 'function'
+                    ? '<div class="vod-act" id="vod-qualbtn" data-z="act" data-i="2">' + ICON_QUAL + ytQualLabel() + '</div>' : '') +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -3391,7 +3717,7 @@ function updateNow() {
 
 function zoneCount(z) {
     if (z === 'video') return 1;
-    if (z === 'act') return $v('vod-trailerbtn') ? 3 : 2;
+    if (z === 'act') return 2 + ($v('vod-qualbtn') ? 1 : 0) + ($v('vod-trailerbtn') ? 1 : 0);
     if (z === 'seasons') return seasonsList().length;
     if (z === 'eps') return epsOfSeason().length;
     if (z === 'rel') return vod.related.length;
@@ -3436,8 +3762,11 @@ function detailKeys(e) {
 function detailEnter() {
     if (vod.zone === 'video') { enterFullscreen(); }
     else if (vod.zone === 'act') {
+        const ab = document.querySelector('#vod-root [data-z="act"][data-i="' + vod.idx + '"]');
+        const aid = ab ? ab.id : '';
         if (vod.idx === 0) enterFullscreen();
-        else if (vod.idx === 2) openTrailer();
+        else if (aid === 'vod-trailerbtn') openTrailer();
+        else if (aid === 'vod-qualbtn') ytStepQuality(-1);
         else {
             toggleFav(vod.card);
             const b = $v('vod-favbtn');
@@ -3539,7 +3868,7 @@ function addTrailerBtn(card, raw) {
     b.className = 'vod-act';
     b.id = 'vod-trailerbtn';
     b.setAttribute('data-z', 'act');
-    b.setAttribute('data-i', '2');
+    b.setAttribute('data-i', $v('vod-qualbtn') ? '3' : '2');
     b.innerHTML = ICON_PLAY + 'Trailer';
     box.appendChild(b);
 }
@@ -3558,7 +3887,7 @@ function openTrailer() {
 }
 
 /* ---------- vídeo: janela, reprodução e progresso ---------- */
-function vodSpin(on) { const s = $v('vod-spin'); if (s) s.classList.toggle('hidden', !on); }
+function vodSpin(on) { const s = $v('vod-spin'); if (s) s.classList.toggle('hidden', !on); netSpeedUpdate(); }
 
 function setWinMode(on) {
     el.video.classList.toggle('vod-window', on);
@@ -3764,10 +4093,22 @@ function playerKeys(e) {
 }
 
 /* Configurações: velocidade e ajuste da imagem */
+function settingsRows() {
+    const r = ['speed', 'fit'];
+    if (vod.src === 'yt' && typeof ytStepQuality === 'function') r.push('qual');
+    if (window.NativeVideo) r.push('dec');
+    return r;
+}
 function renderSettings() {
-    $v('vod-settings').innerHTML =
-        '<div class="vod-set-row' + (vod.settingsRow === 0 ? ' on' : '') + '" data-a="speed"><span>Velocidade</span><b>' + SPEEDS[vod.speedIdx] + 'x</b></div>' +
-        '<div class="vod-set-row' + (vod.settingsRow === 1 ? ' on' : '') + '" data-a="fit"><span>Imagem</span><b>' + (vod.fitCover ? 'Preencher' : 'Ajustar') + '</b></div>';
+    const rows = settingsRows();
+    $v('vod-settings').innerHTML = rows.map(function (id, i) {
+        let lab = '', val = '';
+        if (id === 'speed') { lab = 'Velocidade'; val = SPEEDS[vod.speedIdx] + 'x'; }
+        else if (id === 'fit') { lab = 'Imagem'; val = vod.fitCover ? 'Preencher' : 'Ajustar'; }
+        else if (id === 'qual') { lab = 'Qualidade'; val = ytRes() + 'p'; }
+        else if (id === 'dec') { lab = 'Decodificador (próximo vídeo)'; val = NativeVideo.decoder() === 'hw' ? 'Automático' : 'Software'; }
+        return '<div class="vod-set-row' + (vod.settingsRow === i ? ' on' : '') + '" data-a="' + (id === 'qual' ? 'qual' : id) + '"><span>' + lab + '</span><b>' + val + '</b></div>';
+    }).join('');
 }
 function openSettings() {
     vod.settingsOpen = true;
@@ -3784,17 +4125,22 @@ function closeSettings() {
 function settingsKeys(e) {
     const k = e.key;
     if (k === 'Escape' || k === 'Backspace' || k === 'BrowserBack' || k === 'Enter') { e.preventDefault(); closeSettings(); return; }
-    if (k === 'ArrowUp') { e.preventDefault(); vod.settingsRow = 0; }
-    else if (k === 'ArrowDown') { e.preventDefault(); vod.settingsRow = 1; }
+    if (k === 'ArrowUp') { e.preventDefault(); vod.settingsRow = Math.max(0, vod.settingsRow - 1); }
+    else if (k === 'ArrowDown') { e.preventDefault(); vod.settingsRow = Math.min(settingsRows().length - 1, vod.settingsRow + 1); }
     else if (k === 'ArrowLeft' || k === 'ArrowRight') {
         e.preventDefault();
         const d = k === 'ArrowRight' ? 1 : -1;
-        if (vod.settingsRow === 0) {
+        const rid = settingsRows()[vod.settingsRow];
+        if (rid === 'speed') {
             vod.speedIdx = Math.max(0, Math.min(SPEEDS.length - 1, vod.speedIdx + d));
             el.video.playbackRate = SPEEDS[vod.speedIdx];
-        } else {
+        } else if (rid === 'fit') {
             vod.fitCover = !vod.fitCover;
             el.video.style.objectFit = vod.fitCover ? 'cover' : 'contain';
+        } else if (rid === 'qual') {
+            ytStepQuality(d);
+        } else if (rid === 'dec' && window.NativeVideo) {
+            NativeVideo.toggleDecoder();
         }
     }
     renderSettings();
@@ -3902,21 +4248,32 @@ function startEnterPress(ch) {
         state.longDone = true;
         toggleTvFav(ch);
     }, LONG_PRESS_MS);
+    // segurança: se o aparelho/teclado não avisar que soltou o OK, trata como clique curto
+    clearTimeout(state.enterFallback);
+    state.enterFallback = setTimeout(() => {
+        if (state.enterPressed && !state.longDone) finishEnterPress();
+    }, LONG_PRESS_MS + 250);
+}
+
+// OK solto (clique curto): toca o canal; se já é o canal tocando, a grade de canais some
+function finishEnterPress() {
+    clearTimeout(state.enterTimer);
+    clearTimeout(state.enterFallback);
+    state.enterPressed = false;
+    if (state.longDone) { state.longDone = false; return; }
+    // só toca/fecha se o OK foi mesmo em cima de um canal (evita fechar a grade ao abrir o EPG)
+    if (!state.isMenuVisible || state.activeColumn !== 'channels') return;
+    const ch = state.enterChannel;
+    if (!ch) return;
+    const isAlreadyPlaying = state.playingChannel && state.playingChannel.url === ch.url;
+    if (isAlreadyPlaying) toggleMenu(false);
+    else playChannel(ch);
 }
 
 function setupEnterKeyUp() {
     document.addEventListener('keyup', (e) => {
         if (e.key !== 'Enter' || !state.enterPressed) return;
-        clearTimeout(state.enterTimer);
-        state.enterPressed = false;
-        if (state.longDone) { state.longDone = false; return; }
-        // só toca/fecha se o OK foi mesmo em cima de um canal (evita fechar a grade ao abrir o EPG)
-        if (!state.isMenuVisible || state.activeColumn !== 'channels') return;
-        const ch = state.enterChannel;
-        if (!ch) return;
-        const isAlreadyPlaying = state.playingChannel && state.playingChannel.url === ch.url;
-        if (isAlreadyPlaying) toggleMenu(false);
-        else playChannel(ch);
+        finishEnterPress();
     });
 }
 
@@ -3999,6 +4356,12 @@ function vodPlayerClick(e) {
     else if (a === 'speed') {
         vod.speedIdx = (vod.speedIdx + 1) % SPEEDS.length;
         el.video.playbackRate = SPEEDS[vod.speedIdx];
+        renderSettings();
+    } else if (a === 'qual') {
+        ytStepQuality(-1);
+        renderSettings();
+    } else if (a === 'dec') {
+        if (window.NativeVideo) NativeVideo.toggleDecoder();
         renderSettings();
     } else if (a === 'fit') {
         vod.fitCover = !vod.fitCover;
