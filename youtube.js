@@ -8,13 +8,12 @@
    ==================================================================== */
 
 // Versão deste app. Quando o version.json do GitHub tiver um versionCode MAIOR, aparece o aviso de atualização.
-const APP_VERSION_CODE = 6;
+const APP_VERSION_CODE = 9;
 
 // Regras do YouTube (servidores, SponsorBlock, pastas) e verificação de atualização
 const YT_RULES_URL = 'https://raw.githubusercontent.com/RicardoDark/tviptvtube-arquivoderegras/refs/heads/main/update.json';
-// Aviso de atualização DESLIGADO (vazio): o link antigo era do app Flames TV e oferecia o APK dele.
-// Para ligar, coloque aqui o link do version.json do SEU GitHub (formato no arquivo version.json do projeto).
-const YT_VERSION_URL = '';
+// Aviso de atualização LIGADO: lê o version.json do GitHub RicardoDark/tviptvtube.
+const YT_VERSION_URL = 'https://raw.githubusercontent.com/RicardoDark/TVGratisTube-update/refs/heads/main/version.json';
 
 const YT_RES = 480;                       // qualidade padrão: 480p roda bem nos TV Box fracos (o usuário pode trocar em "Qualidade" e a escolha dele fica guardada)
 const YT_QUAL_KEY = 'iptv_yt_quality';

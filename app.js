@@ -662,8 +662,52 @@ function renderFolders() {
     });
 }
 
+/* ---- grade de canais: montagem aos poucos (leve) ---- */
+const CH_FIRST_CHUNK = 40;     // quantos canais aparecem de início
+const CH_CHUNK = 40;           // quantos entram a cada vez
+const CH_AHEAD = 20;           // sempre deixa pelo menos isto montado à frente do foco
+const chRender = { folder: null, shown: 0 };
+
+function appendChannelItems(count) {
+    const folderName = chRender.folder;
+    if (folderName === null) return;
+    const list = state.channelsByFolder[folderName] || [];
+    const from = chRender.shown, to = Math.min(list.length, from + count);
+    if (from >= to) return;
+    const frag = document.createDocumentFragment();
+    const showHeart = folderName !== FAV_FOLDER;
+    const playingUrl = state.playingChannel && state.playingChannel.url;
+    for (let index = from; index < to; index++) {
+        const channel = list[index];
+        const item = document.createElement('div');
+        item.className = 'list-item';
+        item.id = 'channel-' + index;
+        const heart = (showHeart && isTvFav(channel)) ? '<div class="ch-heart">\u2665</div>' : '';
+        item.innerHTML = '<div class="ch-logo">' + (channel.logo ? '<img src="' + esc(channel.logo) + '" loading="lazy" decoding="async" referrerpolicy="no-referrer" onerror="this.style.visibility=\'hidden\'">' : '') + '</div>' +
+            '<div class="ch-txt"><div class="ch-name">' + esc(channel.name) + '</div><div class="ch-now"></div></div>' + heart;
+        item.dataset.index = index;
+        if (playingUrl && playingUrl === channel.url) item.classList.add('selected');
+        frag.appendChild(item);
+    }
+    const hint = el.channelsList.querySelector('.list-hint');
+    if (hint) el.channelsList.insertBefore(frag, hint); else el.channelsList.appendChild(frag);
+    chRender.shown = to;
+}
+
+// garante que o canal 'index' (e alguns à frente) já está na tela
+function ensureChannelRendered(index) {
+    const need = index + CH_AHEAD;
+    while (chRender.shown <= need) {
+        const before = chRender.shown;
+        appendChannelItems(CH_CHUNK);
+        if (chRender.shown === before) break;
+    }
+}
+
 function renderChannels(folderName) {
     el.channelsList.innerHTML = '';
+    chRender.folder = null;
+    chRender.shown = 0;
     if (isAdultLocked(folderName)) {
         const lockHint = document.createElement('div');
         lockHint.className = 'list-hint';
@@ -672,22 +716,11 @@ function renderChannels(folderName) {
         return;
     }
     const folderChannels = state.channelsByFolder[folderName] || [];
-    
-    folderChannels.forEach((channel, index) => {
-        const item = document.createElement('div');
-        item.className = 'list-item';
-        item.id = `channel-${index}`;
-        const heart = (folderName !== FAV_FOLDER && isTvFav(channel)) ? '<div class="ch-heart">\u2665</div>' : '';
-        item.innerHTML = '<div class="ch-logo">' + (channel.logo ? '<img src="' + esc(channel.logo) + '" referrerpolicy="no-referrer" onerror="this.style.visibility=\'hidden\'">' : '') + '</div>' +
-            '<div class="ch-txt"><div class="ch-name">' + esc(channel.name) + '</div><div class="ch-now"></div></div>' + heart;
-        item.dataset.index = index;
-        
-        if (state.playingChannel && state.playingChannel.url === channel.url) {
-            item.classList.add('selected');
-        }
-        
-        el.channelsList.appendChild(item);
-    });
+
+    // Monta só os primeiros canais; o resto entra conforme o foco desce (pastas com milhares de canais não travam mais)
+    chRender.folder = folderName;
+    chRender.shown = 0;
+    appendChannelItems(CH_FIRST_CHUNK);
 
     if (folderName === FAV_FOLDER && folderChannels.length === 0) {
         const hint = document.createElement('div');
@@ -738,13 +771,14 @@ function updateFocusDOM() {
     } else if (state.activeColumn === 'epgbtn') {
         focusedElement = document.getElementById('epg-btn');
     } else {
+        ensureChannelRendered(state.focusedChannelIndex);
         focusedElement = document.getElementById(`channel-${state.focusedChannelIndex}`);
-        epgFillNow();
+        epgFillNowSoon();
     }
     
     if (focusedElement) {
         focusedElement.classList.add('focused');
-        focusedElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        focusedElement.scrollIntoView({ block: 'nearest', behavior: 'auto' });
     }
 }
 
@@ -786,7 +820,79 @@ function playYouTubeChannel(channel) {
     }
 }
 
-function playChannel(channel) {
+/* ====================================================================
+   CANAL INTELIGENTE (TV ao vivo)
+   Se o canal travar (imagem parada), cair ou falhar ao abrir, o app reconecta sozinho:
+   até 3 tentativas (1 s, 3 s e 6 s). Depois avisa que o canal está fora do ar.
+   Não age com a tela em segundo plano, em YouTube, filmes/séries ou quando você trocou de canal.
+   ==================================================================== */
+const LIVE_STALL_MS = 12000;                 // imagem parada por este tempo = travou
+const LIVE_RETRY_DELAYS = [1000, 3000, 6000];
+const liveWatch = { ch: null, tries: 0, ok: false, lastT: -1, lastMove: 0, timer: null, retryT: null, stableT: null };
+
+function liveWatchStart(channel, isRetry) {
+    liveWatch.ch = channel;
+    liveWatch.ok = false;
+    liveWatch.lastT = -1;
+    liveWatch.lastMove = Date.now();
+    if (!isRetry) liveWatch.tries = 0;
+    clearTimeout(liveWatch.retryT); liveWatch.retryT = null;
+    if (!liveWatch.timer) liveWatch.timer = setInterval(liveWatchTick, 2000);
+}
+function liveWatchStop() {
+    liveWatch.ch = null;
+    liveWatch.ok = false;
+    clearInterval(liveWatch.timer); liveWatch.timer = null;
+    clearTimeout(liveWatch.retryT); liveWatch.retryT = null;
+    clearTimeout(liveWatch.stableT); liveWatch.stableT = null;
+}
+// agenda nova tentativa; devolve false se já gastou as 3 (aí quem chamou mostra a mensagem de erro)
+function liveWatchRecover() {
+    const ch = liveWatch.ch;
+    if (!ch || liveWatch.retryT) return !!liveWatch.retryT;
+    if (liveWatch.tries >= LIVE_RETRY_DELAYS.length) { liveWatchStop(); return false; }
+    const delay = LIVE_RETRY_DELAYS[liveWatch.tries];
+    liveWatch.tries++;
+    liveWatch.ok = false;
+    showStatus('Reconectando o canal... (' + liveWatch.tries + '/' + LIVE_RETRY_DELAYS.length + ')');
+    liveWatch.retryT = setTimeout(function () {
+        liveWatch.retryT = null;
+        if (liveWatch.ch === ch) playChannel(ch, true);
+    }, delay);
+    return true;
+}
+function liveWatchTick() {
+    const ch = liveWatch.ch;
+    if (!ch) return;
+    if (state.vodActive || !state.playingChannel || state.playingChannel.url !== ch.url) { liveWatchStop(); return; }
+    const now = Date.now();
+    if (document.hidden || !liveWatch.ok || liveWatch.retryT || el.video.paused) { liveWatch.lastMove = now; return; }
+    const t = el.video.currentTime;
+    if (t !== liveWatch.lastT) { liveWatch.lastT = t; liveWatch.lastMove = now; return; }
+    if (now - liveWatch.lastMove > LIVE_STALL_MS) {
+        if (!liveWatchRecover()) showStatus('Este canal parece estar fora do ar. Escolha outro canal.', false);
+    }
+}
+(function () {
+    const v = el.video;
+    if (!v || !v.addEventListener) return;
+    v.addEventListener('playing', function () {
+        if (!liveWatch.ch) return;
+        liveWatch.ok = true;
+        liveWatch.lastMove = Date.now();
+        // ficou tocando firme por um tempo: zera as tentativas
+        clearTimeout(liveWatch.stableT);
+        liveWatch.stableT = setTimeout(function () { liveWatch.tries = 0; }, 25000);
+    });
+    v.addEventListener('ended', function () {
+        // transmissão ao vivo que "termina" = o servidor derrubou o canal
+        if (liveWatch.ch && liveWatch.ok && !liveWatchRecover()) {
+            showStatus('Este canal parece estar fora do ar. Escolha outro canal.', false);
+        }
+    });
+})();
+
+function playChannel(channel, isRetry) {
     if (!channel || !channel.url) return;
     
     state.playingChannel = channel;
@@ -804,17 +910,20 @@ function playChannel(channel) {
     }
 
     if (String(channel.url).indexOf('yt:') === 0) {
+        liveWatchStop();
         ytPlayLive(channel);
         return;
     }
 
     if (channel.url.includes('youtube.com') || channel.url.includes('youtu.be')) {
+        liveWatchStop();
         playYouTubeChannel(channel);
         return;
     }
 
-    showStatus('Carregando mídia...');
+    showStatus(isRetry ? 'Reconectando o canal...' : 'Carregando mídia...');
     try { stopStream(); el.video.pause(); } catch (e) {}
+    liveWatchStart(channel, isRetry);
     localStorage.setItem(STORAGE_LAST_CHANNEL_KEY, JSON.stringify(channel));
     localStorage.setItem('iptv_last_played_folder', state.folders[state.selectedFolderIndex]);
 
@@ -851,6 +960,8 @@ function playChannel(channel) {
             showStatus('Pressione OK para reproduzir.', false);
         },
         onFail: function (why) {
+            // canal smart: tenta reconectar sozinho antes de desistir
+            if (liveWatchRecover()) return;
             showStatus('Não foi possível abrir este canal' + (why ? ' (' + why + ')' : '') + '. Tente outro.', false);
         }
     });
@@ -899,7 +1010,38 @@ function loadLastPlayedChannel() {
     }
 }
 
+// Ao abrir a grade, volta para a pasta e o canal que está tocando (barra azul em cima dele)
+function focusPlayingChannel() {
+    const pc = state.playingChannel;
+    if (!pc || state.epgMode) return;
+    let fi = state.selectedFolderIndex;
+    const inFolder = function (i) {
+        const f = state.folders[i];
+        if (!f || isAdultLocked(f) || f === SEARCH_FOLDER) return -1;
+        return (state.channelsByFolder[f] || []).findIndex(function (c) { return c.url === pc.url; });
+    };
+    let ci = inFolder(fi);
+    if (ci < 0) {
+        const order = [];
+        const pf = state.folders.indexOf(pc.folder);
+        if (pf >= 0) order.push(pf);
+        for (let i = 0; i < state.folders.length; i++) if (i !== pf && i !== fi) order.push(i);
+        for (let k = 0; k < order.length; k++) {
+            const idx = inFolder(order[k]);
+            if (idx >= 0) { fi = order[k]; ci = idx; break; }
+        }
+        if (ci < 0) return;
+        selectFolder(fi, false);
+    }
+    state.focusedFolderIndex = fi;
+    state.focusedChannelIndex = ci;
+    state.activeColumn = 'channels';
+    const folderItem = document.getElementById('folder-' + fi);
+    if (folderItem) folderItem.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+}
+
 function toggleMenu(forceVisible = null) {
+    const wasVisible = state.isMenuVisible;
     if (forceVisible !== null) {
         state.isMenuVisible = forceVisible;
     } else {
@@ -909,7 +1051,12 @@ function toggleMenu(forceVisible = null) {
     if (state.isMenuVisible) {
         el.overlay.classList.add('visible');
         el.overlay.classList.remove('hidden');
+        if (!wasVisible) focusPlayingChannel();
         updateFocusDOM();
+        if (!wasVisible) {
+            const f = el.channelsList.querySelector('.list-item.focused');
+            if (f) f.scrollIntoView({ block: 'center', behavior: 'auto' });
+        }
         resetMenuInactivityTimer();
     } else {
         el.overlay.classList.remove('visible');
@@ -954,6 +1101,11 @@ function epgFetch(sid, full) {
         epg.cache[key] = items;
         return items;
     });
+}
+let epgSoonT = null;
+function epgFillNowSoon() {
+    if (epgSoonT) clearTimeout(epgSoonT);
+    epgSoonT = setTimeout(function () { epgSoonT = null; epgFillNow(); }, 250);
 }
 function epgFillNow() {
     if (!state.api || state.epgMode) return;
@@ -2758,6 +2910,7 @@ function destroyHls() {
 }
 
 function stopStream() {
+    if (typeof liveWatchStop === 'function') liveWatchStop();
     if (typeof ytStopAux === 'function') ytStopAux();
     streamToken++;
     clearTimeout(streamWatch);
