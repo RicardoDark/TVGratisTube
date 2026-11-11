@@ -9,7 +9,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap" rel="stylesheet">
     <script>document.documentElement.className+=' has-session';</script>
-    <link rel="stylesheet" href="style.css?v=31">
+    <link rel="stylesheet" href="style.css?v=33">
     <!-- Local HLS.js Library -->
     <script src="hls.min.js"></script>
 </head>
@@ -96,6 +96,8 @@
 
     <!-- Category Selection Splash Screen -->
     <div id="splash-screen">
+        <!-- Live wallpaper (video sorteado; fica guardado no aparelho) -->
+        <video id="splash-video" muted loop playsinline preload="auto" tabindex="-1"></video>
         <!-- Vencimento da lista IPTV (canto superior esquerdo) -->
         <div id="splash-expiry" class="splash-expiry hidden">
             <div id="splash-expiry-main" class="splash-expiry-main"></div>
@@ -240,7 +242,7 @@
     </div>
 
     <script src="nativeplayer.js?v=3"></script>
-    <script src="app.js?v=52"></script>
-    <script src="youtube.js?v=22"></script>
+    <script src="app.js?v=54"></script>
+    <script src="youtube.js?v=23"></script>
 </body>
 </html>

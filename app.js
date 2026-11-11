@@ -230,6 +230,110 @@ function handleSplashKeys(e) {
     }
 }
 
+
+/* ====================================================================
+   PAPEIS DE PAREDE ALEATORIOS
+   - Tela inicial (TV ao Vivo / Filmes / Series): LIVE WALLPAPER (video) sorteado a cada vez que a tela aparece.
+     No Android os videos sao baixados UMA vez e ficam guardados no aparelho (AndroidWall).
+   - Filmes e Series: IMAGEM sorteada a cada vez que a tela abre (as imagens tambem ficam guardadas: ImageCache).
+   Para trocar/adicionar: e so mexer nas listas abaixo (links do Dropbox com dl=1).
+   ==================================================================== */
+const WALL_VIDEOS = [
+    'https://www.dropbox.com/scl/fi/rl7kx75n9iynt3ep3roi5/01.mp4?rlkey=6pgohd4l5b9jx1cr04q59axaq&st=u63iycry&dl=1',
+    'https://www.dropbox.com/scl/fi/uiry5migmo2u32n1w4x0g/02.mp4?rlkey=929a25isd2fnay0m0nbzfkh4r&st=690mihrn&dl=1',
+    'https://www.dropbox.com/scl/fi/wid8uo1l0pe6qhoeay972/03.mp4?rlkey=14td8o8w16jr8d3vnrqig5nho&st=v950tt1t&dl=1',
+    'https://www.dropbox.com/scl/fi/o5ddx0oln8t3lolpqw6ug/04.mp4?rlkey=47xl6jf1o6agz130k9myiyb5u&st=w7k1tyq8&dl=1',
+    'https://www.dropbox.com/scl/fi/7o9ck5gxzzs86k2nmeeru/05.mp4?rlkey=bnoog5c8htjrps390hwa0z59w&st=as9fc9ws&dl=1'
+];
+const WALL_IMAGES = [
+    'https://www.dropbox.com/scl/fi/n4etbmjtpu3333gu19mr0/Wallpaper2.jpg?rlkey=34fhsoewdwkn9aj5jzxlxv7ow&st=k6249720&dl=1',
+    'https://www.dropbox.com/scl/fi/1cf53u4jy7kp43ldif7i2/Wallpaper2.jpg?rlkey=aynlwsdo0q56sobzkau3psv5x&st=cminlz96&dl=1',
+    'https://www.dropbox.com/scl/fi/vk1l4io89fr9sis1i81wy/Wallpaper3.jpg?rlkey=52bkqzdjsvlhrv9r89c8eeq78&st=66i67xf3&dl=1',
+    'https://www.dropbox.com/scl/fi/r52mdoqbtdmk2opewu32w/Wallpaper4.jpg?rlkey=yuhvwj90acwxbfv9z4tcuodv7&st=m9yvrt3v&dl=1',
+    'https://www.dropbox.com/scl/fi/79vbr2upy6h2byals9fxl/Wallpaper5.jpg?rlkey=yet48hyojxmdcq63pup8zimti&st=n8y9lsx3&dl=1'
+];
+const wall = { timer: null, tries: 0, synced: false, on: false };
+
+// sorteia sem repetir o ultimo que apareceu
+function wallPick(arr, key) {
+    if (!arr.length) return -1;
+    if (arr.length === 1) return 0;
+    let last = -1;
+    try { last = parseInt(localStorage.getItem(key), 10); } catch (e) {}
+    let i = Math.floor(Math.random() * arr.length);
+    if (i === last) i = (i + 1) % arr.length;
+    try { localStorage.setItem(key, String(i)); } catch (e) {}
+    return i;
+}
+
+function wallReadyVideos() {
+    try {
+        if (window.AndroidWall) return JSON.parse(window.AndroidWall.ready(JSON.stringify(WALL_VIDEOS))) || [];
+    } catch (e) {}
+    return [];
+}
+
+function wallSync() {
+    if (wall.synced) return;
+    wall.synced = true;
+    try {
+        if (window.AndroidWall) {
+            window.AndroidWall.sync(JSON.stringify(WALL_VIDEOS));
+            window.AndroidWall.syncImages(JSON.stringify(WALL_IMAGES));
+        }
+    } catch (e) {}
+}
+
+function wallPlayVideo() {
+    const v = document.getElementById('splash-video');
+    if (!v || !wall.on) return true;
+    // no PC (sem AndroidWall) toca direto do link; no Android so toca o que ja esta guardado
+    const list = window.AndroidWall ? wallReadyVideos() : WALL_VIDEOS;
+    if (!list.length) return false;
+    const i = wallPick(list, 'wall_last_video');
+    v.muted = true;
+    v.loop = true;
+    v.onplaying = function () { v.classList.add('on'); };
+    v.onerror = function () { v.classList.remove('on'); };
+    v.src = list[i];
+    try { const p = v.play(); if (p && p.catch) p.catch(function () {}); } catch (e) {}
+    return true;
+}
+
+function wallStart() {
+    wall.on = true;
+    wallSync();
+    clearTimeout(wall.timer);
+    wall.tries = 0;
+    const attempt = function () {
+        if (!wall.on) return;
+        if (wallPlayVideo()) return;
+        // primeira vez: ainda baixando. Confere de novo a cada poucos segundos (a imagem fixa aparece enquanto isso)
+        if (++wall.tries < 60) wall.timer = setTimeout(attempt, 4000);
+    };
+    attempt();
+}
+
+// libera o decodificador de video (importante no TV Box: nao compete com o player dos canais)
+function wallStop() {
+    wall.on = false;
+    clearTimeout(wall.timer);
+    const v = document.getElementById('splash-video');
+    if (!v) return;
+    try { v.pause(); } catch (e) {}
+    v.classList.remove('on');
+    v.removeAttribute('src');
+    try { v.load(); } catch (e) {}
+}
+
+// imagem sorteada de Filmes e Series (chamado toda vez que a tela abre)
+function wallPickVodImage() {
+    const i = wallPick(WALL_IMAGES, 'wall_last_image');
+    if (i < 0) return;
+    const root = document.getElementById('vod-root');
+    if (root) root.style.setProperty('--vod-bg', "url('" + WALL_IMAGES[i] + "')");
+}
+
 function selectCategoryAndStart(category, opts) {
     state.selectedCategory = category;
     state.fromYtBack = false;
@@ -239,10 +343,12 @@ function selectCategoryAndStart(category, opts) {
 
     el.splash.classList.add('hidden');
     el.splash.classList.remove('splash-visible');
+    wallStop();
     startApp();
 }
 
 function startApp() {
+    document.documentElement.classList.add('app-started');   // a grade de canais só aparece depois que o usuário escolhe TV/Filmes/Séries
     const cat = state.selectedCategory;
     const wantsVod = (cat === 'movies' || cat === 'series' || cat === 'mixed');
 
@@ -1249,6 +1355,7 @@ function zapChannel(direction) {
 function setupKeyboardNavigation() {
     setupEnterKeyUp();
     document.addEventListener('keydown', (e) => {
+        state.lastKeyAt = Date.now();
         if (state.isMenuVisible) {
             resetMenuInactivityTimer();
         }
@@ -1322,7 +1429,7 @@ function setupKeyboardNavigation() {
                 if (state.activeColumn === 'folders') {
                     state.focusedFolderIndex = (state.focusedFolderIndex - 1 + folderCount) % folderCount;
                     selectFolder(state.focusedFolderIndex, false);
-                } else {
+                } else if (channelCount > 0) {
                     state.focusedChannelIndex = (state.focusedChannelIndex - 1 + channelCount) % channelCount;
                 }
                 updateFocusDOM();
@@ -1333,7 +1440,7 @@ function setupKeyboardNavigation() {
                 if (state.activeColumn === 'folders') {
                     state.focusedFolderIndex = (state.focusedFolderIndex + 1) % folderCount;
                     selectFolder(state.focusedFolderIndex, false);
-                } else {
+                } else if (channelCount > 0) {
                     state.focusedChannelIndex = (state.focusedChannelIndex + 1) % channelCount;
                 }
                 updateFocusDOM();
@@ -2090,6 +2197,7 @@ function showLoginScreen() {
     ls.style.display = '';
     ls.classList.add('login-visible');
     el.splash.classList.remove('splash-visible');
+    wallStop();
     document.removeEventListener('keydown', handleLoginKeys);
     document.addEventListener('keydown', handleLoginKeys);
     loginFocus(4);
@@ -2446,6 +2554,7 @@ function showSplashAfterLogin() {
     state.splashZone = 'cards';
     state.splashFocusIndex = 0;
     updateSplashFocus();
+    wallStart();
     setTimeout(prefetchAll, 800);   // baixa/atualiza as listas em segundo plano
     if (typeof ytCheckUpdate === 'function') setTimeout(ytCheckUpdate, 1500);   // aviso de versão nova (vale nos dois modos)
 }
@@ -3326,6 +3435,7 @@ function vodActivate() {
     document.body.classList.add('vod-on');
     el.overlay.classList.add('hidden');
     el.overlay.classList.remove('visible');
+    if (!$v('vod-root').classList.contains('active')) wallPickVodImage();   // papel de parede aleatorio a cada vez que a tela abre
     $v('vod-root').classList.add('active');
 
     if (vod.inited) return;

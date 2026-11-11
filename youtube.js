@@ -8,7 +8,7 @@
    ==================================================================== */
 
 // Versão deste app. Quando o version.json do GitHub tiver um versionCode MAIOR, aparece o aviso de atualização.
-const APP_VERSION_CODE = 9;
+const APP_VERSION_CODE = 11;
 
 // Regras do YouTube (servidores, SponsorBlock, pastas) e verificação de atualização
 const YT_RULES_URL = 'https://raw.githubusercontent.com/RicardoDark/tviptvtube-arquivoderegras/refs/heads/main/update.json';
@@ -571,21 +571,47 @@ function ytInjectTv() {
 }
 
 // mostra na tela a lista nova da pasta (só se a aba TV está aberta)
+// A busca de canais roda em segundo plano e termina várias vezes: reconstruir a grade toda enquanto a pessoa
+// navega (ou troca de canal) fazia o app travar. Agora:
+//  - a lista de dados é atualizada na hora (leve);
+//  - a grade na tela só é refeita se a lista realmente mudou, e só quando a pessoa para de mexer no controle.
+let ytTvPaint = { t: null, p: null };
 function ytTvApply(p, live) {
     const list = ytTvList(p, live);
     if (state.selectedCategory !== 'tv' || state.folders.indexOf(p.title) === -1) return;
+    const old = state.channelsByFolder[p.title] || [];
+    let same = old.length === list.length;
+    for (let i = 0; same && i < list.length; i++) if (old[i].url !== list[i].url) same = false;
+    if (same && !(yt.tvSt[p.key] && yt.tvSt[p.key].state === 'fail')) return;   // nada mudou: não mexe em nada
+
     state.channelsByFolder[p.title] = list;
     state.channels = state.channels.filter(function (c) { return c.folder !== p.title; }).concat(list);
     if (state.channelsByFolder[ALL_FOLDER]) {
         state.channelsByFolder[ALL_FOLDER] = state.channels.filter(function (c) { return !isAdultLocked(c.folder); })
             .slice().sort(function (a, b) { return a.name.localeCompare(b.name, 'pt', { numeric: true, sensitivity: 'base' }); });
     }
-    if (state.folders[state.selectedFolderIndex] === p.title) {
-        if (state.focusedChannelIndex >= list.length) state.focusedChannelIndex = Math.max(0, list.length - 1);
-        el.currentFolderTitle.textContent = p.title + ' < ' + list.length + ' >';
+    if (state.folders[state.selectedFolderIndex] !== p.title) return;
+
+    if (state.focusedChannelIndex >= list.length) state.focusedChannelIndex = Math.max(0, list.length - 1);
+    el.currentFolderTitle.textContent = p.title + ' < ' + list.length + ' >';
+    ytTvPaint.p = p;
+    ytTvPaintSoon();
+}
+function ytTvPaintSoon() {
+    clearTimeout(ytTvPaint.t);
+    ytTvPaint.t = setTimeout(function () {
+        const p = ytTvPaint.p;
+        if (!p) return;
+        // a pessoa mexeu no controle há menos de 1,5 s (ou está trocando de canal): espera mais um pouco
+        if (Date.now() - (state.lastKeyAt || 0) < 1500 || (typeof el !== 'undefined' && el.status && !el.status.classList.contains('hidden'))) {
+            ytTvPaintSoon();
+            return;
+        }
+        ytTvPaint.p = null;
+        if (state.selectedCategory !== 'tv' || state.folders[state.selectedFolderIndex] !== p.title) return;
         renderChannels(p.title);
         updateFocusDOM();
-    }
+    }, 700);
 }
 
 // texto na pasta enquanto ela está vazia (usado pelo renderChannels do app.js)
