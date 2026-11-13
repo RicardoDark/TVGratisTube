@@ -252,6 +252,8 @@ const WALL_IMAGES = [
     'https://www.dropbox.com/scl/fi/r52mdoqbtdmk2opewu32w/Wallpaper4.jpg?rlkey=yuhvwj90acwxbfv9z4tcuodv7&st=m9yvrt3v&dl=1',
     'https://www.dropbox.com/scl/fi/79vbr2upy6h2byals9fxl/Wallpaper5.jpg?rlkey=yet48hyojxmdcq63pup8zimti&st=n8y9lsx3&dl=1'
 ];
+// Volume dos videos de papel de parede da tela inicial: de 0 (sem som) a 100 (maximo)
+const WALL_VOLUME = 20;
 const wall = { timer: null, tries: 0, synced: false, on: false };
 
 // sorteia sem repetir o ultimo que apareceu
@@ -291,7 +293,8 @@ function wallPlayVideo() {
     const list = window.AndroidWall ? wallReadyVideos() : WALL_VIDEOS;
     if (!list.length) return false;
     const i = wallPick(list, 'wall_last_video');
-    v.muted = true;
+    v.volume = Math.max(0, Math.min(100, WALL_VOLUME)) / 100;
+    v.muted = (WALL_VOLUME <= 0);
     v.loop = true;
     v.onplaying = function () { v.classList.add('on'); };
     v.onerror = function () { v.classList.remove('on'); };
@@ -1616,7 +1619,10 @@ function netSpeedVisible() {
 }
 
 function netSpeedText(kb, approx) {
-    return (approx ? '~ ' : '') + Math.round(kb).toLocaleString('pt-BR') + ' KB/s';
+    // igual ao download do navegador do PC: MB/s com 1 casa (ex.: 4,2 MB/s); abaixo de 1 MB/s mostra KB/s
+    const pre = approx ? '~ ' : '';
+    if (kb >= 1000) return pre + (kb / 1024).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + ' MB/s';
+    return pre + Math.round(kb) + ' KB/s';
 }
 
 function netSpeedPaint(text) {
@@ -4019,7 +4025,11 @@ function detailKeys(e) {
     const zi = zones.indexOf(vod.zone);
 
     if (k === 'ArrowUp' || k === 'ArrowDown') {
-        const nz = zones[zi + (k === 'ArrowDown' ? 1 : -1)];
+        let step = (k === 'ArrowDown' ? 1 : -1);
+        // Do video, "para baixo" pula a fileira de botoes (Tela Cheia/Favorito/Qualidade, que se alcanca com a seta
+        // para a direita) e vai direto para os videos de baixo (temporadas/episodios ou recomendacoes)
+        if (vod.zone === 'video' && step === 1) step = 2;
+        const nz = zones[zi + step];
         if (!nz) return;
         let ni = Math.min(vod.idx, Math.max(0, zoneCount(nz) - 1));
         if (nz === 'seasons') ni = Math.max(0, seasonsList().indexOf(vod.season));
