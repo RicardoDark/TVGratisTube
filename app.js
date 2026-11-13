@@ -34,20 +34,20 @@ const M3U_URL = 'https://raw.githubusercontent.com/RicardoDark/iptv01/refs/heads
 // Dados que já aparecem preenchidos na tela de login (dá para editar na tela)
 const DEFAULT_USER = '10203040';
 const DEFAULT_PASS = '40506070';
-const DEFAULT_SERVER = 'https://cinepulse.rtvplay.workers.dev/';
+const DEFAULT_SERVER = 'https://tv.playvx.workers.dev';
 
 // Servidores que aparecem na tela de login. A pessoa só vê o NOME; o link fica escondido.
 // Para adicionar o Servidor 4 (ou mais), é só colocar o link aqui.
 const SERVERS = [
-    { name: 'Servidor-1', url: 'https://cinepulse.rtvplay.workers.dev/' },
-    { name: 'Servidor-2', url: 'https://power.rtvplay.workers.dev/' },
-    { name: 'Servidor-3', url: 'https://servidor3.rtvplay.workers.dev/' }
+    { name: 'Servidor-1', url: 'https://tv.playvx.workers.dev' },
+    { name: 'Servidor-2', url: 'https://servidor1.playvx.workers.dev' },
+    { name: 'Servidor-3', url: 'https://servidor2.playvx.workers.dev' }
     // , { name: 'Servidor 4', url: 'COLOQUE_O_LINK_AQUI' }
 ].filter(function (s) { return s.url && s.url.indexOf('COLOQUE') === -1; });
 
 // Login remoto: o painel (Cloudflare Worker) manda usuário/senha para o app pelo código (MAC) mostrado na tela de login.
 // Se você publicar o worker do login-remoto em outro endereço, troque só este link.
-const REMOTE_URL = 'https://painel-apps-registrados.playvx.workers.dev';
+const REMOTE_URL = 'https://login-remoto.playvx.workers.dev';
 const REMOTE_POLL_MS = 3000;
 
 // Bloqueio adulto: qualquer pasta/categoria/título com "XXX" fica bloqueado até digitar a senha
@@ -334,7 +334,25 @@ function wallPickVodImage() {
     if (root) root.style.setProperty('--vod-bg', "url('" + WALL_IMAGES[i] + "')");
 }
 
+// Lembra de qual cartão da tela inicial o usuário saiu (0 TV, 1 Filmes, 2 Séries).
+// Entrou por cima (Favoritos/Histórico) -> ao voltar cai em TV.
+function splashRememberCard(category, opts) {
+    let idx = 0;
+    if (!(opts && (opts.tvFavorites || opts.vodCat))) {
+        idx = category === 'movies' ? 1 : category === 'series' ? 2 : 0;
+    }
+    try { sessionStorage.setItem('splash_last_card', String(idx)); } catch (e) {}
+}
+function splashRecallCard() {
+    try {
+        const v = parseInt(sessionStorage.getItem('splash_last_card'), 10);
+        if (v >= 0 && v <= 2) return v;
+    } catch (e) {}
+    return 0;
+}
+
 function selectCategoryAndStart(category, opts) {
+    splashRememberCard(category, opts);
     state.selectedCategory = category;
     state.fromYtBack = false;
     state.startFavorites = !!(opts && opts.tvFavorites);
@@ -2552,7 +2570,7 @@ function showSplashAfterLogin() {
     renderDeviceInfo();
     el.splash.classList.add('splash-visible');
     state.splashZone = 'cards';
-    state.splashFocusIndex = 0;
+    state.splashFocusIndex = splashRecallCard();
     updateSplashFocus();
     wallStart();
     setTimeout(prefetchAll, 800);   // baixa/atualiza as listas em segundo plano

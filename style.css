@@ -1591,3 +1591,37 @@ html:not(.app-started) #overlay-menu { visibility: hidden !important; opacity: 0
     background: linear-gradient(rgba(0,0,0,0.72), rgba(0,0,0,0.88)), var(--vod-bg, none) no-repeat center center, #000;
     background-size: cover;
 }
+
+/* ---- ANIMAÇÃO LEVE DO ÍCONE DO CENTRO QUANDO EM FOCO (só transform/opacity = leve na TV Box) ---- */
+.splash-card-icon { position: relative; }
+.splash-card-icon::after {
+    content: '';
+    position: absolute;
+    inset: -2px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 190, 110, 0.9);
+    opacity: 0;
+    pointer-events: none;
+}
+.splash-card.focused .splash-card-icon, .splash-card:hover .splash-card-icon {
+    animation: iconBreath 1.6s ease-in-out infinite;
+}
+.splash-card.focused .splash-card-icon::after, .splash-card:hover .splash-card-icon::after {
+    animation: iconPing 1.6s ease-out infinite;
+}
+.splash-card.focused .splash-card-icon svg, .splash-card:hover .splash-card-icon svg {
+    animation: iconWiggle 2.4s ease-in-out infinite;
+}
+@keyframes iconBreath {
+    0%, 100% { transform: scale(1.08); }
+    50%      { transform: scale(1.15); }
+}
+@keyframes iconPing {
+    0%   { transform: scale(1);    opacity: 0.8; }
+    100% { transform: scale(1.35); opacity: 0; }
+}
+@keyframes iconWiggle {
+    0%, 100% { transform: rotate(0deg) scale(1); }
+    25%      { transform: rotate(-5deg) scale(1.05); }
+    75%      { transform: rotate(5deg) scale(1.05); }
+}

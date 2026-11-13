@@ -8,7 +8,7 @@
    ==================================================================== */
 
 // Versão deste app. Quando o version.json do GitHub tiver um versionCode MAIOR, aparece o aviso de atualização.
-const APP_VERSION_CODE = 55;
+const APP_VERSION_CODE = 12;
 
 // Regras do YouTube (servidores, SponsorBlock, pastas) e verificação de atualização
 const YT_RULES_URL = 'https://raw.githubusercontent.com/RicardoDark/tviptvtube-arquivoderegras/refs/heads/main/update.json';
