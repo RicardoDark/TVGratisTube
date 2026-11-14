@@ -243,7 +243,12 @@ const WALL_VIDEOS = [
     'https://www.dropbox.com/scl/fi/uiry5migmo2u32n1w4x0g/02.mp4?rlkey=929a25isd2fnay0m0nbzfkh4r&st=690mihrn&dl=1',
     'https://www.dropbox.com/scl/fi/wid8uo1l0pe6qhoeay972/03.mp4?rlkey=14td8o8w16jr8d3vnrqig5nho&st=v950tt1t&dl=1',
     'https://www.dropbox.com/scl/fi/o5ddx0oln8t3lolpqw6ug/04.mp4?rlkey=47xl6jf1o6agz130k9myiyb5u&st=w7k1tyq8&dl=1',
-    'https://www.dropbox.com/scl/fi/7o9ck5gxzzs86k2nmeeru/05.mp4?rlkey=bnoog5c8htjrps390hwa0z59w&st=as9fc9ws&dl=1'
+    'https://www.dropbox.com/scl/fi/7o9ck5gxzzs86k2nmeeru/05.mp4?rlkey=bnoog5c8htjrps390hwa0z59w&st=as9fc9ws&dl=1',
+    'https://www.dropbox.com/scl/fi/okfsz8elpiy8bz7qfnosn/06.mp4?rlkey=gv2oq07ia0gjwh67slncbufyh&st=w4sjxzlt&dl=1',
+    'https://www.dropbox.com/scl/fi/5oj9yo2t3cjo9evx16jz1/07.mp4?rlkey=q6psbsxmclvgqmxdxjkdm3knb&st=xozwax1r&dl=1',
+    'https://www.dropbox.com/scl/fi/25h5d2onfew7v546u5ma7/08.mp4?rlkey=zcsvxag118t6507i0iyduqry9&st=q70v2mms&dl=1',
+    'https://www.dropbox.com/scl/fi/xhl1jtetwujphxve94y3q/09.mp4?rlkey=78as5qmlt884vqw6bikargtqa&st=gq4ybvbh&dl=1',
+    'https://www.dropbox.com/scl/fi/x3uhhbvk947g8je81a86z/10.mp4?rlkey=h2j7dxjisnuq6avi4v3tsg0ke&st=denxrykp&dl=1'
 ];
 const WALL_IMAGES = [
     'https://www.dropbox.com/scl/fi/n4etbmjtpu3333gu19mr0/Wallpaper2.jpg?rlkey=34fhsoewdwkn9aj5jzxlxv7ow&st=k6249720&dl=1',
